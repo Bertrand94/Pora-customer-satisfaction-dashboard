@@ -209,15 +209,10 @@ TABLES = {
 
 
 @st.cache_resource
-def get_conn():
-    """One shared in-memory SQLite connection for the whole app.
 
-    cache_resource — NOT cache_data — because sqlite3.Connection cannot
-    be pickled, and cache_data pickles its return value.
-    check_same_thread=False is required because Streamlit reruns the
-    script on different threads.
-    """
-  
+@st.cache_resource
+def get_conn():
+    """Create one shared in-memory SQLite connection."""
     missing_files = [
         filename
         for filename in TABLES.values()
@@ -229,9 +224,16 @@ def get_conn():
             f"DATA_DIR is set to: {DATA_DIR}. "
             f"Missing CSV files: {missing_files}"
         )
- 
-conn = get_conn()
 
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+
+    for table_name, filename in TABLES.items():
+        file_path = os.path.join(DATA_DIR, filename)
+        df = pd.read_csv(file_path)
+        df.to_sql(table_name, conn, index=False, if_exists="replace")
+
+    return conn
+conn = get_conn()
 
 # ── Filter contract ────────────────────────────────────────────────────────
 def year_params(year):              return (year, year)
