@@ -108,7 +108,6 @@ st.markdown(
         border-radius: 4px;
       }
 
-      /* Info cards for Limitations / Recommendations / Research */
       .info-card {
         background: #FFFFFF;
         border: 1px solid #E5DEF7;
@@ -440,7 +439,7 @@ def chart_score_by_state(conn, year, state_json):
     )
 
 
-# ── Chart 3b — Brazil choropleth ───────────────────────────────────────────
+# ── Chart 3b — Brazil choropleth (top 10 states only, with labels) ────────
 @st.cache_data(show_spinner=False)
 def _load_brazil_geojson():
     """Fetch and cache the Brazil-states GeoJSON."""
@@ -464,8 +463,49 @@ def _load_brazil_geojson():
     )
 
 
+@st.cache_data(show_spinner=False)
+def _state_centroids():
+    """
+    Hard-coded approximate centroids for the 27 Brazilian states.
+    Used to place text labels on the choropleth.
+    """
+    return {
+        "AC": (-9.0238,   -70.8120),
+        "AL": (-9.5713,   -36.7820),
+        "AM": (-3.4168,   -65.8561),
+        "AP": ( 1.4100,   -51.7700),
+        "BA": (-12.5797,  -41.7007),
+        "CE": (-5.4984,   -39.3206),
+        "DF": (-15.7998,  -47.8645),
+        "ES": (-19.1834,  -40.3089),
+        "GO": (-15.8270,  -49.8362),
+        "MA": (-4.9609,   -45.2744),
+        "MG": (-18.5122,  -44.5550),
+        "MS": (-20.7722,  -54.7852),
+        "MT": (-12.6819,  -56.9211),
+        "PA": (-3.7900,   -52.4800),
+        "PB": (-7.2400,   -36.7820),
+        "PE": (-8.8137,   -36.9541),
+        "PI": (-7.7183,   -42.7289),
+        "PR": (-24.8934,  -51.5300),
+        "RJ": (-22.9068,  -43.1729),
+        "RN": (-5.7945,   -36.5298),
+        "RO": (-11.5057,  -63.5806),
+        "RR": ( 2.7376,   -62.0751),
+        "RS": (-30.0346,  -51.2177),
+        "SC": (-27.2423,  -50.2189),
+        "SE": (-10.5741,  -37.3857),
+        "SP": (-23.5505,  -46.6333),
+        "TO": (-10.1753,  -48.2982),
+    }
+
+
 def chart_brazil_map(conn, year, state_json):
-    """Q4 rendered geographically — all 27 states always visible."""
+    """
+    Q4 rendered geographically — TOP 10 STATES ONLY, each labelled
+    with its state code and average review score.
+    """
+    # ── 1. Fetch metrics for every state (year-filter only) ─────────────
     all_states_df = pd.read_sql("""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
@@ -475,24 +515,43 @@ def chart_brazil_map(conn, year, state_json):
         JOIN reviews r  ON o.order_id  = r.order_id
         WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
         GROUP BY state
+        ORDER BY orders DESC
+        LIMIT 10
     """, conn, params=year_params(year))
 
+    if all_states_df.empty:
+        st.info("No data for the current filter selection.")
+        return
+
+    # ── 2. Which states are currently selected in the sidebar? ──────────
     selected = json.loads(state_json)
     filter_active = len(selected) > 0
 
-    full_grid = pd.DataFrame({"state": ALL_STATES})
-    full_grid = full_grid.merge(all_states_df, on="state", how="left")
-    full_grid["orders"]    = full_grid["orders"].fillna(0).astype(int)
-    full_grid["avg_score"] = full_grid["avg_score"].fillna(0)
-
+    # ── 3. Restrict to the top-10 set (union with any user-selected) ────
+    top10 = all_states_df["state"].tolist()
     if filter_active:
-        full_grid["display_score"] = full_grid.apply(
+        keep_states = sorted(set(top10) | set(selected))
+    else:
+        keep_states = top10
+
+    # Ensure every kept state has a row (fill zeros for missing ones)
+    kept_df = pd.DataFrame({"state": keep_states}).merge(
+        all_states_df[["state", "orders", "avg_score"]],
+        on="state", how="left",
+    )
+    kept_df["orders"]    = kept_df["orders"].fillna(0).astype(int)
+    kept_df["avg_score"] = kept_df["avg_score"].fillna(0)
+
+    # ── 4. Column Plotly colours by (grey sentinel for filtered-out) ────
+    if filter_active:
+        kept_df["display_score"] = kept_df.apply(
             lambda row: row["avg_score"] if row["state"] in selected else -1,
             axis=1,
         )
     else:
-        full_grid["display_score"] = full_grid["avg_score"]
+        kept_df["display_score"] = kept_df["avg_score"]
 
+    # ── 5. Hover text ────────────────────────────────────────────────────
     def hover_label(row):
         if filter_active and row["state"] not in selected:
             return "Not in current filter"
@@ -500,17 +559,49 @@ def chart_brazil_map(conn, year, state_json):
             return "No orders"
         return f"{row['avg_score']:.2f} avg · {row['orders']:,} orders"
 
-    full_grid["hover"] = full_grid.apply(hover_label, axis=1)
+    kept_df["hover"] = kept_df.apply(hover_label, axis=1)
+
+    # ── 6. Centroids for the labels ──────────────────────────────────────
+    centroids = _state_centroids()
+    kept_df["lat"] = kept_df["state"].map(
+        lambda s: centroids.get(s, (None, None))[0]
+    )
+    kept_df["lon"] = kept_df["state"].map(
+        lambda s: centroids.get(s, (None, None))[1]
+    )
+
+    # Only label states that are actually visible (not filtered out)
+    if filter_active:
+        label_df = kept_df[kept_df["state"].isin(selected)].dropna(
+            subset=["lat", "lon"]
+        )
+    else:
+        label_df = kept_df.dropna(subset=["lat", "lon"])
+
+    # Text to render on the map: "SP\n4.17"
+    label_df = label_df.assign(
+        label=label_df.apply(
+            lambda r: (f"{r['state']}\n{r['avg_score']:.2f}"
+                       if r["orders"] > 0 else r["state"]),
+            axis=1,
+        )
+    )
 
     geojson = _load_brazil_geojson()
 
+    # ── 7. Colour scale ──────────────────────────────────────────────────
     color_scale = [
-        [0.00, "#3F3F5A"], [0.05, "#3F3F5A"], [0.10, "#B83232"],
-        [0.45, "#F0A0A0"], [0.65, "#C4B5FD"], [1.00, "#6D3FB5"],
+        [0.00, "#3F3F5A"],   # filtered-out grey
+        [0.05, "#3F3F5A"],
+        [0.10, "#B83232"],   # low score, red
+        [0.45, "#F0A0A0"],
+        [0.65, "#C4B5FD"],   # high score, purple
+        [1.00, "#6D3FB5"],
     ]
 
+    # ── 8. Build the choropleth ──────────────────────────────────────────
     fig = px.choropleth(
-        full_grid,
+        kept_df,
         geojson=geojson,
         locations="state",
         featureidkey="properties.sigla",
@@ -526,19 +617,42 @@ def chart_brazil_map(conn, year, state_json):
 
     fig.update_traces(
         hovertemplate="<b>%{location}</b><br>%{customdata[0]}<extra></extra>",
-        marker_line_width=0.8,
+        marker_line_width=1.0,
         marker_line_color="#FFFFFF",
     )
 
+    # ── 9. Overlay the labels as scatter points ──────────────────────────
+    if not label_df.empty:
+        fig.add_scattergeo(
+            lat=label_df["lat"],
+            lon=label_df["lon"],
+            text=label_df["label"],
+            mode="text",
+            textfont=dict(
+                size=11,
+                color="#1F2937",
+                family="sans-serif",
+            ),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+
+    # ── 10. Geography + layout ───────────────────────────────────────────
     fig.update_geos(
-        fitbounds="locations", visible=False,
-        bgcolor="rgba(0,0,0,0)", showcountries=False,
-        showcoastlines=False, showland=False, showlakes=False,
+        fitbounds="locations",
+        visible=False,
+        bgcolor="rgba(0,0,0,0)",
+        showcountries=False,
+        showcoastlines=False,
+        showland=False,
+        showlakes=False,
+        projection_type="mercator",
     )
 
     fig.update_layout(
         title=dict(
-            text="Average Review Score by State (Brazil) — all 27 states",
+            text=("Average Review Score — Top 10 States "
+                  "(Brazil) with state labels"),
             x=0.5, xanchor="center",
             font=dict(size=14, color="#4C1D95", family="sans-serif"),
         ),
@@ -554,16 +668,16 @@ def chart_brazil_map(conn, year, state_json):
             ticktext=["Filtered out", "3.9", "4.0", "4.1", "4.2", "4.3"],
         ),
         font=dict(family="sans-serif", color="#3F3D56"),
-        height=580,
+        height=620,
     )
 
     st.plotly_chart(fig, use_container_width=True)
     st.caption(
-        "**Finding.** All 27 states are drawn. States in the active sidebar "
-        "filter show their real score; states outside the filter appear grey. "
-        "BA and RJ anchor the low end; PR, SP, MG hold the high end. RJ's "
-        "low score against its wealthy Southeast neighbours signals an "
-        "operational problem, not a regional one."
+        "**Finding.** Map shows the **top 10 states by order volume** with "
+        "each state's code and average review score overlaid on the "
+        "polygon. BA and RJ anchor the low end; PR, SP, MG hold the high "
+        "end. RJ's low score against its wealthy Southeast neighbours "
+        "signals an operational problem, not a regional one."
     )
 
 
