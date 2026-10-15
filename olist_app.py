@@ -190,14 +190,14 @@ GREY         = "#9CA3AF"
 # ════════════════════════════════════════════════════════════════════════════
 # SECTION 1 — DATA LAYER
 # ════════════════════════════════════════════════════════════════════════════
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = (
-    os.environ.get("OLIST_DATA_DIR")
-    or (r"C:\Users\USER\OneDrive\Desktop\Datasets"
-        if os.name == "nt"
-        and os.path.isdir(r"C:\Users\USER\OneDrive\Desktop\Datasets")
-        else os.path.join(_HERE, "data"))
+
+DATA_DIR = os.environ.get(
+    "OLIST_DATA_DIR",
+    os.path.join(_HERE, "data")
 )
+
 
 TABLES = {
     "orders":      "olist_orders_dataset.csv",
@@ -221,15 +221,19 @@ def get_conn():
     for name, fname in TABLES.items():
         path = os.path.join(DATA_DIR, fname)
         if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Missing dataset: {path}\n"
-                f"Set OLIST_DATA_DIR, or place the five CSVs in ./data/"
-            )
-        pd.read_csv(path).to_sql(name, conn, if_exists="replace", index=False)
-    return conn
+            
+missing_files = [
+    filename
+    for filename in TABLES.values()
+    if not os.path.isfile(os.path.join(DATA_DIR, filename))
+]
 
+if missing_files:
+    raise FileNotFoundError(
+        f"DATA_DIR is set to: {DATA_DIR}. "
+        f"Missing CSV files: {missing_files}"
+    )
 
-conn = get_conn()
 
 
 # ── Filter contract ────────────────────────────────────────────────────────
