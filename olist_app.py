@@ -217,23 +217,20 @@ def get_conn():
     check_same_thread=False is required because Streamlit reruns the
     script on different threads.
     """
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    for name, fname in TABLES.items():
-        path = os.path.join(DATA_DIR, fname)
-        if not os.path.exists(path):
-            
-missing_files = [
-    filename
-    for filename in TABLES.values()
-    if not os.path.isfile(os.path.join(DATA_DIR, filename))
-]
+  
+    missing_files = [
+        filename
+        for filename in TABLES.values()
+        if not os.path.isfile(os.path.join(DATA_DIR, filename))
+    ]
 
-if missing_files:
-    raise FileNotFoundError(
-        f"DATA_DIR is set to: {DATA_DIR}. "
-        f"Missing CSV files: {missing_files}"
-    )
-
+    if missing_files:
+        raise FileNotFoundError(
+            f"DATA_DIR is set to: {DATA_DIR}. "
+            f"Missing CSV files: {missing_files}"
+        )
+ 
+conn = get_conn()
 
 
 # ── Filter contract ────────────────────────────────────────────────────────
