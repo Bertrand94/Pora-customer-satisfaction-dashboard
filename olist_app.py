@@ -1,4 +1,4 @@
-# olist_app.py
+# app.py
 """
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis and AI Automation
@@ -6,11 +6,11 @@ PORA Academy Cohort 7 · Data Analysis and AI Automation
 Executive-grade Streamlit dashboard with:
   • Filter-proof guards (no crashes on empty/invalid selections)
   • 6 curated charts
-  • 7 tabs: Overview, Customer Satisfaction, Detail & Method,
+  • 8 tabs: Overview, Customer Satisfaction, Detail & Method,
             Limitations, Recommendations, Departments, Future Research,
             Executive Report
   • Fully connected Year + State filters on every KPI and chart
-  • Professional, business-manager-grade wording throughout
+  • Concise, business-ready executive headline
 """
 
 import os
@@ -189,24 +189,55 @@ st.markdown(
         border-radius: 8px;
         margin: 16px 0;
       }
+
+      /* ── Executive headline banner ───────────────────────────────── */
       .exec-headline {
         background: linear-gradient(90deg, #F5F0FF 0%, #EDE7FA 100%);
         border-left: 5px solid #6D3FB5;
-        padding: 20px 26px;
+        padding: 22px 28px;
         border-radius: 10px;
-        margin: 6px 0 22px 0;
+        margin: 8px 0 22px 0;
         box-shadow: 0 3px 12px rgba(109, 63, 181, 0.10);
       }
       .exec-headline h2 {
-        margin-top: 0; margin-bottom: 10px;
-        color: #4C1D95; font-size: 20px;
+        margin: 0 0 14px 0;
+        color: #4C1D95;
+        font-size: 20px;
+        font-weight: 800;
+        letter-spacing: -0.01em;
       }
       .exec-headline p {
-        font-size: 15px; color: #3F3D56; line-height: 1.7; margin: 6px 0;
+        font-size: 15px;
+        color: #3F3D56;
+        line-height: 1.75;
+        margin: 0 0 10px 0;
       }
+      .exec-headline p:last-child { margin-bottom: 0; }
       .exec-headline .big-number {
-        color: #D64545; font-size: 24px; font-weight: 800;
-        padding: 0 4px;
+        color: #D64545;
+        font-size: 22px;
+        font-weight: 800;
+        padding: 0 2px;
+      }
+      .exec-headline .hl {
+        color: #6D3FB5;
+        font-weight: 700;
+      }
+      .exec-headline .priority {
+        background: rgba(139, 92, 246, 0.10);
+        border-left: 3px solid #8B5CF6;
+        padding: 10px 16px;
+        border-radius: 6px;
+        margin-top: 12px;
+        font-size: 15px;
+        line-height: 1.7;
+      }
+      .exec-headline .caveat {
+        display: inline-block;
+        color: #6B7280;
+        font-style: italic;
+        font-size: 14px;
+        margin-top: 8px;
       }
     </style>
     """,
@@ -992,34 +1023,37 @@ st.markdown(
 )
 
 
-# ── Executive headline banner ──────────────────────────────────────────────
+# ── Executive headline banner (concise, four sentences) ────────────────────
 st.markdown(
     """
     <div class="exec-headline">
-      <h2>Executive Insight: Delivery Reliability and Customer Satisfaction</h2>
+      <h2>Executive Headline</h2>
+
       <p>
-        Customer satisfaction is <b>strongly associated with delivery
-        punctuality</b> in the Olist marketplace dataset. The dashboard
-        reports an average review score of <b>4.29 stars for on-time
-        deliveries</b>, compared with <b>2.57 stars for late
-        deliveries</b> — a difference of
-        <span class="big-number">1.73 stars</span>.
+        <span class="hl">On-time deliveries average 4.29 stars</span>,
+        compared with <span class="hl">2.57 stars for late deliveries</span>
+        — a <span class="big-number">1.73-star gap</span>.
       </p>
+
       <p>
-        Although late deliveries account for a reported <b>8.1%</b> of
-        delivered orders, they occur, on average, <b>9.55 days beyond
-        the estimated delivery date</b>. Rio de Janeiro (RJ) emerges as
-        a priority area for operational investigation, with a reported
-        late-delivery rate of <b style="color:#D64545;">13.5%</b>,
-        compared with the <b>5.9%</b> national benchmark.
+        Late deliveries affect <span class="hl">8.1% of delivered
+        orders</span>, averaging <span class="hl">9.55 days beyond the
+        estimated date</span>.
       </p>
+
       <p>
-        These findings support a targeted, evidence-led approach focused
-        on delivery performance, realistic delivery commitments,
-        proactive customer communication, and regional logistics
-        improvement. The results indicate an <b>association, not proof
-        of causation</b>.
+        <span class="hl">Rio de Janeiro</span> has a higher late-delivery
+        rate (<span class="big-number">13.5%</span>) than the national
+        benchmark (<span class="hl">5.9%</span>).
       </p>
+
+      <div class="priority">
+        <b>Priority:</b> Improve delivery reliability, realistic delivery
+        estimates, proactive communication, and regional logistics.
+        <span class="caveat">
+          These findings show an association, not proof of causation.
+        </span>
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
