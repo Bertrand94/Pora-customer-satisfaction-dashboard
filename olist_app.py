@@ -950,9 +950,11 @@ def render_projection_headline() -> None:
     """
     Render the animated headline banner.
 
-    Uses one ``st.markdown`` call per logical fragment with single-line
-    HTML — this preserves CSS animations and avoids accidental
-    whitespace-induced gaps across Streamlit versions.
+    The three headline facts are presented as compact horizontal
+    blocks — label, headline number, and supporting detail on a single
+    row (wrapping to two lines on narrow viewports). One ``st.markdown``
+    call per block keeps CSS animations intact across Streamlit
+    versions and avoids whitespace-induced layout gaps.
     """
     with st.container():
         st.markdown(
@@ -967,33 +969,51 @@ def render_projection_headline() -> None:
             '<div class="projection-underline"></div>',
             unsafe_allow_html=True,
         )
+
+        # ── Block 1 — Punctuality gap ────────────────────────────────
         st.markdown(
-            '<p class="projection-line l1">'
-            '<span class="hl">On-time deliveries average 4.29 stars</span>, '
-            'compared with <span class="hl">2.57 stars for late deliveries'
-            '</span> — a <span class="projection-number">1.73-star gap</span>.'
-            '</p>',
+            '<div class="projection-block b1">'
+            '<span class="block-label">Punctuality gap</span>'
+            '<span class="block-number">1.73'
+            '<span class="block-unit"> stars</span></span>'
+            '<span class="block-detail">'
+            'On-time deliveries <span class="hl">4.29</span> vs late '
+            '<span class="hl">2.57</span> — the strongest satisfaction '
+            'driver in the dataset.'
+            '</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Block 2 — Late-delivery exposure ─────────────────────────
         st.markdown(
-            '<p class="projection-line l2">'
-            'Late deliveries affect '
-            '<span class="hl">8.1% of delivered orders</span>, averaging '
-            '<span class="projection-number small">9.55 days</span> '
-            'beyond the estimated date.'
-            '</p>',
+            '<div class="projection-block b2">'
+            '<span class="block-label">Late-delivery exposure</span>'
+            '<span class="block-number">8.1'
+            '<span class="block-unit">% of delivered orders</span></span>'
+            '<span class="block-detail">'
+            'Late orders run <span class="hl">9.55 days</span> beyond '
+            'the estimated delivery date.'
+            '</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Block 3 — Regional outlier ───────────────────────────────
         st.markdown(
-            '<p class="projection-line l3">'
-            '<span class="hl">Rio de Janeiro</span> has a higher '
-            'late-delivery rate '
-            '(<span class="projection-number">13.5%</span>) '
-            'than the national benchmark '
-            '(<span class="projection-number small purple">5.9%</span>).'
-            '</p>',
+            '<div class="projection-block b3">'
+            '<span class="block-label">Regional outlier</span>'
+            '<span class="block-number">13.5'
+            '<span class="block-unit">% late in RJ</span></span>'
+            '<span class="block-detail">'
+            'vs <span class="hl">5.9%</span> nationally — 2.3× the '
+            'benchmark.'
+            '</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
+
+        # ── Priority bar + caveat ────────────────────────────────────
         st.markdown(
             '<div class="projection-priority">'
             '<span class="priority-label">PRIORITY ·</span> '
@@ -1174,7 +1194,7 @@ GLOBAL_CSS: Final[str] = """
                       rgba(214,69,69,0.07) 0%, transparent 45%),
       linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
     border: 1px solid #E5DEF7; border-radius: 14px;
-    padding: 28px 36px 26px 36px; margin: 8px 0 22px 0;
+    padding: 26px 32px 24px 32px; margin: 8px 0 22px 0;
     animation: projectionGlow 4.5s ease-in-out infinite;
   }
   .projection-frame::after {
@@ -1196,27 +1216,49 @@ GLOBAL_CSS: Final[str] = """
     height: 2px;
     background: linear-gradient(90deg, #6D3FB5 0%,
                 #8B5CF6 60%, transparent 100%);
-    margin: 0 0 18px 0; transform: scaleX(0); transform-origin: left;
+    margin: 0 0 16px 0; transform: scaleX(0); transform-origin: left;
     animation: underlineSweep 1.1s ease-out 0.35s forwards;
   }
-  .projection-line {
-    font-size: 17px; color: #3F3D56; line-height: 1.85;
-    margin: 0 0 10px 0; opacity: 0;
+
+  /* ── Headline fact blocks ──────────────────────────────────────── */
+  .projection-block {
+    display: flex; align-items: baseline; flex-wrap: wrap;
+    column-gap: 14px; row-gap: 2px;
+    padding: 10px 16px; margin: 0 0 10px 0;
+    background: rgba(255, 255, 255, 0.62);
+    border-left: 3px solid #8B5CF6; border-radius: 8px;
+    opacity: 0;
     animation: projectionFadeIn 1.0s ease-out forwards;
   }
-  .projection-line.l1 { animation-delay: 0.55s; }
-  .projection-line.l2 { animation-delay: 1.15s; }
-  .projection-line.l3 { animation-delay: 1.75s; }
-  .projection-line .hl { color: #6D3FB5; font-weight: 700; }
-  .projection-number {
-    display: inline-block; color: #D64545; font-size: 24px;
-    font-weight: 800; padding: 0 4px; letter-spacing: -0.01em;
+  .projection-block.b1 { animation-delay: 0.55s; }
+  .projection-block.b2 { animation-delay: 1.15s; }
+  .projection-block.b3 { animation-delay: 1.75s; }
+
+  .projection-block .block-label {
+    font-size: 11px; font-weight: 800; letter-spacing: 0.16em;
+    text-transform: uppercase; color: #6D3FB5;
+    white-space: nowrap; flex: 0 0 auto;
+  }
+  .projection-block .block-number {
+    font-size: 26px; font-weight: 800; color: #D64545;
+    line-height: 1.1; letter-spacing: -0.02em;
+    white-space: nowrap; flex: 0 0 auto;
     animation: numberPulse 2.4s ease-in-out infinite;
   }
-  .projection-number.small { font-size: 20px; }
-  .projection-number.purple { color: #6D3FB5; animation: none; }
+  .projection-block .block-number .block-unit {
+    font-size: 13px; font-weight: 700; color: #6D3FB5;
+    letter-spacing: 0; margin-left: 2px; animation: none;
+  }
+  .projection-block .block-detail {
+    font-size: 15px; color: #3F3D56; line-height: 1.45;
+    flex: 1 1 auto; min-width: 0;
+  }
+  .projection-block .block-detail .hl {
+    color: #6D3FB5; font-weight: 700;
+  }
+
   .projection-priority {
-    margin-top: 16px; padding: 14px 20px;
+    margin-top: 14px; padding: 14px 20px;
     background: linear-gradient(90deg,
                 rgba(139,92,246,0.10) 0%,
                 rgba(139,92,246,0.04) 100%);
@@ -1235,6 +1277,13 @@ GLOBAL_CSS: Final[str] = """
     display: block; margin-top: 10px; color: #6B7280;
     font-style: italic; font-size: 14px; opacity: 0;
     animation: projectionFadeIn 1.0s ease-out 3.1s forwards;
+  }
+
+  /* Narrow screens — let the detail wrap under the number cleanly. */
+  @media (max-width: 640px) {
+    .projection-block { row-gap: 4px; }
+    .projection-block .block-number { font-size: 22px; }
+    .projection-block .block-detail { flex-basis: 100%; font-size: 14px; }
   }
 </style>
 """
