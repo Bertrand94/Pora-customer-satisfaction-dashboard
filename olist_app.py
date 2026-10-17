@@ -1,16 +1,16 @@
-# app.py
+# olist_app.py
 """
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis and AI Automation
 
 Executive-grade Streamlit dashboard with:
+  • Animated "screen projection" executive headline (CSS-only)
   • Filter-proof guards (no crashes on empty/invalid selections)
   • 6 curated charts
   • 8 tabs: Overview, Customer Satisfaction, Detail & Method,
             Limitations, Recommendations, Departments, Future Research,
             Executive Report
   • Fully connected Year + State filters on every KPI and chart
-  • Concise, business-ready executive headline
 """
 
 import os
@@ -38,7 +38,7 @@ st.set_page_config(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# GLOBAL CSS
+# GLOBAL CSS — includes keyframe animations for the projection headline
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown(
     """
@@ -190,54 +190,170 @@ st.markdown(
         margin: 16px 0;
       }
 
-      /* ── Executive headline banner ───────────────────────────────── */
-      .exec-headline {
-        background: linear-gradient(90deg, #F5F0FF 0%, #EDE7FA 100%);
-        border-left: 5px solid #6D3FB5;
-        padding: 22px 28px;
-        border-radius: 10px;
+      /* ═══════════════════════════════════════════════════════════════
+         ANIMATED SCREEN-PROJECTION HEADLINE
+         ═══════════════════════════════════════════════════════════════ */
+
+      /* ── Global keyframes ─────────────────────────────────────────── */
+      @keyframes projectionFadeIn {
+        0%   { opacity: 0; transform: translateY(14px) scale(0.97); filter: blur(6px); }
+        60%  { opacity: 0.9; filter: blur(1px); }
+        100% { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); }
+      }
+      @keyframes projectionGlow {
+        0%   { box-shadow: 0 0 0 rgba(139, 92, 246, 0.0),
+                           inset 0 0 40px rgba(139, 92, 246, 0.05); }
+        50%  { box-shadow: 0 0 32px rgba(139, 92, 246, 0.20),
+                           inset 0 0 60px rgba(139, 92, 246, 0.08); }
+        100% { box-shadow: 0 0 0 rgba(139, 92, 246, 0.0),
+                           inset 0 0 40px rgba(139, 92, 246, 0.05); }
+      }
+      @keyframes scanLine {
+        0%   { top: -8%; opacity: 0; }
+        10%  { opacity: 1; }
+        90%  { opacity: 1; }
+        100% { top: 108%; opacity: 0; }
+      }
+      @keyframes numberPulse {
+        0%   { text-shadow: 0 0 0 rgba(214, 69, 69, 0.0); }
+        30%  { text-shadow: 0 0 18px rgba(214, 69, 69, 0.45),
+                            0 0 32px rgba(214, 69, 69, 0.25); }
+        100% { text-shadow: 0 0 0 rgba(214, 69, 69, 0.0); }
+      }
+      @keyframes slideInLeft {
+        0%   { opacity: 0; transform: translateX(-24px); }
+        100% { opacity: 1; transform: translateX(0); }
+      }
+      @keyframes underlineSweep {
+        0%   { transform: scaleX(0); transform-origin: left; }
+        100% { transform: scaleX(1); transform-origin: left; }
+      }
+
+      /* ── Projection frame ─────────────────────────────────────────── */
+      .projection-frame {
+        position: relative;
+        overflow: hidden;
+        background:
+          radial-gradient(circle at 15% 20%, rgba(139,92,246,0.10) 0%, transparent 45%),
+          radial-gradient(circle at 85% 80%, rgba(214,69,69,0.07) 0%, transparent 45%),
+          linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
+        border: 1px solid #E5DEF7;
+        border-radius: 14px;
+        padding: 28px 36px 26px 36px;
         margin: 8px 0 22px 0;
-        box-shadow: 0 3px 12px rgba(109, 63, 181, 0.10);
+        animation: projectionGlow 4.5s ease-in-out infinite;
       }
-      .exec-headline h2 {
-        margin: 0 0 14px 0;
-        color: #4C1D95;
-        font-size: 20px;
+
+      /* Moving scan line for the "projection" feel */
+      .projection-frame::after {
+        content: "";
+        position: absolute;
+        left: 0; right: 0;
+        height: 3px;
+        background: linear-gradient(90deg,
+                     transparent 0%,
+                     rgba(139,92,246,0.55) 50%,
+                     transparent 100%);
+        filter: blur(0.5px);
+        animation: scanLine 3.2s ease-in-out infinite;
+        pointer-events: none;
+      }
+
+      /* Content of the projection frame */
+      .projection-content {
+        position: relative;
+        z-index: 2;
+      }
+
+      .projection-title {
+        font-size: 13px;
         font-weight: 800;
-        letter-spacing: -0.01em;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: #6D3FB5;
+        margin: 0 0 6px 0;
+        opacity: 0;
+        animation: projectionFadeIn 0.9s ease-out 0.05s forwards;
       }
-      .exec-headline p {
-        font-size: 15px;
+
+      .projection-underline {
+        height: 2px;
+        background: linear-gradient(90deg, #6D3FB5 0%, #8B5CF6 60%, transparent 100%);
+        margin: 0 0 18px 0;
+        transform: scaleX(0);
+        transform-origin: left;
+        animation: underlineSweep 1.1s ease-out 0.35s forwards;
+      }
+
+      .projection-line {
+        font-size: 17px;
         color: #3F3D56;
-        line-height: 1.75;
+        line-height: 1.85;
         margin: 0 0 10px 0;
+        opacity: 0;
+        animation: projectionFadeIn 1.0s ease-out forwards;
       }
-      .exec-headline p:last-child { margin-bottom: 0; }
-      .exec-headline .big-number {
-        color: #D64545;
-        font-size: 22px;
-        font-weight: 800;
-        padding: 0 2px;
-      }
-      .exec-headline .hl {
+      .projection-line.l1 { animation-delay: 0.55s; }
+      .projection-line.l2 { animation-delay: 1.15s; }
+      .projection-line.l3 { animation-delay: 1.75s; }
+
+      .projection-line .hl {
         color: #6D3FB5;
         font-weight: 700;
       }
-      .exec-headline .priority {
-        background: rgba(139, 92, 246, 0.10);
-        border-left: 3px solid #8B5CF6;
-        padding: 10px 16px;
-        border-radius: 6px;
-        margin-top: 12px;
-        font-size: 15px;
+
+      .projection-number {
+        display: inline-block;
+        color: #D64545;
+        font-size: 24px;
+        font-weight: 800;
+        padding: 0 4px;
+        letter-spacing: -0.01em;
+        animation: numberPulse 2.4s ease-in-out infinite;
+      }
+      .projection-number.small {
+        font-size: 20px;
+      }
+      .projection-number.purple {
+        color: #6D3FB5;
+        animation: none;
+      }
+
+      .projection-priority {
+        margin-top: 16px;
+        padding: 14px 20px;
+        background: linear-gradient(90deg,
+                    rgba(139,92,246,0.10) 0%,
+                    rgba(139,92,246,0.04) 100%);
+        border-left: 4px solid #8B5CF6;
+        border-radius: 8px;
+        opacity: 0;
+        transform: translateX(-24px);
+        animation: slideInLeft 1.1s ease-out 2.4s forwards;
+      }
+
+      .projection-priority .priority-label {
+        display: inline-block;
+        font-weight: 800;
+        color: #4C1D95;
+        letter-spacing: 0.05em;
+        margin-right: 6px;
+      }
+
+      .projection-priority .priority-text {
+        font-size: 15.5px;
+        color: #3F3D56;
         line-height: 1.7;
       }
-      .exec-headline .caveat {
-        display: inline-block;
+
+      .projection-caveat {
+        display: block;
+        margin-top: 10px;
         color: #6B7280;
         font-style: italic;
         font-size: 14px;
-        margin-top: 8px;
+        opacity: 0;
+        animation: projectionFadeIn 1.0s ease-out 3.1s forwards;
       }
     </style>
     """,
@@ -1023,36 +1139,44 @@ st.markdown(
 )
 
 
-# ── Executive headline banner (concise, four sentences) ────────────────────
+# ── Animated screen-projection headline ───────────────────────────────────
 st.markdown(
     """
-    <div class="exec-headline">
-      <h2>Executive Headline</h2>
+    <div class="projection-frame">
+      <div class="projection-content">
+        <p class="projection-title">Executive Headline · Screen Projection</p>
+        <div class="projection-underline"></div>
 
-      <p>
-        <span class="hl">On-time deliveries average 4.29 stars</span>,
-        compared with <span class="hl">2.57 stars for late deliveries</span>
-        — a <span class="big-number">1.73-star gap</span>.
-      </p>
+        <p class="projection-line l1">
+          <span class="hl">On-time deliveries average 4.29 stars</span>,
+          compared with <span class="hl">2.57 stars for late deliveries</span>
+          — a <span class="projection-number">1.73-star gap</span>.
+        </p>
 
-      <p>
-        Late deliveries affect <span class="hl">8.1% of delivered
-        orders</span>, averaging <span class="hl">9.55 days beyond the
-        estimated date</span>.
-      </p>
+        <p class="projection-line l2">
+          Late deliveries affect
+          <span class="hl">8.1% of delivered orders</span>, averaging
+          <span class="projection-number small">9.55 days</span> beyond
+          the estimated date.
+        </p>
 
-      <p>
-        <span class="hl">Rio de Janeiro</span> has a higher late-delivery
-        rate (<span class="big-number">13.5%</span>) than the national
-        benchmark (<span class="hl">5.9%</span>).
-      </p>
+        <p class="projection-line l3">
+          <span class="hl">Rio de Janeiro</span> has a higher late-delivery
+          rate (<span class="projection-number">13.5%</span>) than the
+          national benchmark
+          (<span class="projection-number small purple">5.9%</span>).
+        </p>
 
-      <div class="priority">
-        <b>Priority:</b> Improve delivery reliability, realistic delivery
-        estimates, proactive communication, and regional logistics.
-        <span class="caveat">
-          These findings show an association, not proof of causation.
-        </span>
+        <div class="projection-priority">
+          <span class="priority-label">PRIORITY ·</span>
+          <span class="priority-text">
+            Improve delivery reliability, realistic delivery estimates,
+            proactive communication, and regional logistics.
+          </span>
+          <span class="projection-caveat">
+            These findings show an association, not proof of causation.
+          </span>
+        </div>
       </div>
     </div>
     """,
