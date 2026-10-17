@@ -1,10 +1,13 @@
-# olist_app.py
+# app.py
 """
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis and AI Automation
 
 Executive-grade Streamlit dashboard with:
-  • Animated "screen projection" executive headline (CSS-only)
+  • Animated "screen projection" executive headline — rebuilt with
+    native Streamlit features (st.container, st.columns, st.markdown)
+    so that whitespace and animations render reliably across Streamlit
+    versions and deployment environments.
   • Filter-proof guards (no crashes on empty/invalid selections)
   • 6 curated charts
   • 8 tabs: Overview, Customer Satisfaction, Detail & Method,
@@ -38,7 +41,7 @@ st.set_page_config(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# GLOBAL CSS — includes keyframe animations for the projection headline
+# GLOBAL CSS — animations + projection-headline styling
 # ════════════════════════════════════════════════════════════════════════════
 st.markdown(
     """
@@ -191,10 +194,10 @@ st.markdown(
       }
 
       /* ═══════════════════════════════════════════════════════════════
-         ANIMATED SCREEN-PROJECTION HEADLINE
+         PROJECTION HEADLINE — styling + keyframe animations
          ═══════════════════════════════════════════════════════════════ */
 
-      /* ── Global keyframes ─────────────────────────────────────────── */
+      /* ── Keyframes ────────────────────────────────────────────────── */
       @keyframes projectionFadeIn {
         0%   { opacity: 0; transform: translateY(14px) scale(0.97); filter: blur(6px); }
         60%  { opacity: 0.9; filter: blur(1px); }
@@ -229,7 +232,7 @@ st.markdown(
         100% { transform: scaleX(1); transform-origin: left; }
       }
 
-      /* ── Projection frame ─────────────────────────────────────────── */
+      /* ── Projection panel (outer frame) ───────────────────────────── */
       .projection-frame {
         position: relative;
         overflow: hidden;
@@ -243,8 +246,6 @@ st.markdown(
         margin: 8px 0 22px 0;
         animation: projectionGlow 4.5s ease-in-out infinite;
       }
-
-      /* Moving scan line for the "projection" feel */
       .projection-frame::after {
         content: "";
         position: absolute;
@@ -258,13 +259,9 @@ st.markdown(
         animation: scanLine 3.2s ease-in-out infinite;
         pointer-events: none;
       }
+      .projection-content { position: relative; z-index: 2; }
 
-      /* Content of the projection frame */
-      .projection-content {
-        position: relative;
-        z-index: 2;
-      }
-
+      /* ── Title + underline ─────────────────────────────────────────── */
       .projection-title {
         font-size: 13px;
         font-weight: 800;
@@ -275,7 +272,6 @@ st.markdown(
         opacity: 0;
         animation: projectionFadeIn 0.9s ease-out 0.05s forwards;
       }
-
       .projection-underline {
         height: 2px;
         background: linear-gradient(90deg, #6D3FB5 0%, #8B5CF6 60%, transparent 100%);
@@ -285,6 +281,7 @@ st.markdown(
         animation: underlineSweep 1.1s ease-out 0.35s forwards;
       }
 
+      /* ── Each projection line ──────────────────────────────────────── */
       .projection-line {
         font-size: 17px;
         color: #3F3D56;
@@ -311,14 +308,13 @@ st.markdown(
         letter-spacing: -0.01em;
         animation: numberPulse 2.4s ease-in-out infinite;
       }
-      .projection-number.small {
-        font-size: 20px;
-      }
+      .projection-number.small { font-size: 20px; }
       .projection-number.purple {
         color: #6D3FB5;
         animation: none;
       }
 
+      /* ── Priority block ────────────────────────────────────────────── */
       .projection-priority {
         margin-top: 16px;
         padding: 14px 20px;
@@ -331,7 +327,6 @@ st.markdown(
         transform: translateX(-24px);
         animation: slideInLeft 1.1s ease-out 2.4s forwards;
       }
-
       .projection-priority .priority-label {
         display: inline-block;
         font-weight: 800;
@@ -339,14 +334,12 @@ st.markdown(
         letter-spacing: 0.05em;
         margin-right: 6px;
       }
-
       .projection-priority .priority-text {
         font-size: 15.5px;
         color: #3F3D56;
         line-height: 1.7;
       }
-
-      .projection-caveat {
+      .projection-priority .projection-caveat {
         display: block;
         margin-top: 10px;
         color: #6B7280;
@@ -631,7 +624,99 @@ def safe_metric_display(value, fmt="{:,.0f}", default="—"):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 5 — CURATED CHARTS (6 total, all guard-protected)
+# SECTION 5 — PROJECTION HEADLINE (native Streamlit composition)
+# ════════════════════════════════════════════════════════════════════════════
+def render_projection_headline():
+    """
+    Compose the animated projection headline using native Streamlit calls
+    rather than a single monolithic HTML blob.
+
+    Why this matters:
+      • Streamlit's markdown renderer collapses whitespace unpredictably
+        when a large HTML block contains indentation across multiple lines.
+      • Splitting the content into several st.markdown calls keeps each
+        HTML fragment compact — no whitespace surprises.
+      • Wrapping everything in a st.container(key=...) gives us a stable
+        anchor so the animation doesn't restart on every re-render.
+
+    Each st.markdown call is deliberately written without leading spaces
+    inside the f-string so Streamlit emits exactly the HTML we intend.
+    """
+
+    # ── Outer frame — one-line HTML, no internal newlines ──────────────
+    with st.container():
+        st.markdown(
+            '<div class="projection-frame"><div class="projection-content">',
+            unsafe_allow_html=True,
+        )
+
+        # ── Title + animated underline ─────────────────────────────────
+        st.markdown(
+            '<p class="projection-title">Executive Headline · Screen Projection</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            '<div class="projection-underline"></div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Line 1: 4.29 vs 2.57 → 1.73-star gap ───────────────────────
+        st.markdown(
+            '<p class="projection-line l1">'
+            '<span class="hl">On-time deliveries average 4.29 stars</span>, '
+            'compared with <span class="hl">2.57 stars for late deliveries</span> '
+            '— a <span class="projection-number">1.73-star gap</span>.'
+            '</p>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Line 2: 8.1% / 9.55 days ───────────────────────────────────
+        st.markdown(
+            '<p class="projection-line l2">'
+            'Late deliveries affect '
+            '<span class="hl">8.1% of delivered orders</span>, averaging '
+            '<span class="projection-number small">9.55 days</span> '
+            'beyond the estimated date.'
+            '</p>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Line 3: RJ 13.5% vs national 5.9% ──────────────────────────
+        st.markdown(
+            '<p class="projection-line l3">'
+            '<span class="hl">Rio de Janeiro</span> has a higher '
+            'late-delivery rate '
+            '(<span class="projection-number">13.5%</span>) '
+            'than the national benchmark '
+            '(<span class="projection-number small purple">5.9%</span>).'
+            '</p>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Priority block with the causation caveat ───────────────────
+        st.markdown(
+            '<div class="projection-priority">'
+            '<span class="priority-label">PRIORITY ·</span> '
+            '<span class="priority-text">'
+            'Improve delivery reliability, realistic delivery estimates, '
+            'proactive communication, and regional logistics.'
+            '</span>'
+            '<span class="projection-caveat">'
+            'These findings show an association, not proof of causation.'
+            '</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ── Close the frame ────────────────────────────────────────────
+        st.markdown(
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# SECTION 6 — CURATED CHARTS (6 total, all guard-protected)
 # ════════════════════════════════════════════════════════════════════════════
 
 # ── Chart 1 — Review Score Distribution (whole-dataset) ────────────────────
@@ -1090,7 +1175,7 @@ def chart_satisfaction_by_delivery_bucket(conn, year, state_json):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 6 — HELPER CARD RENDERER
+# SECTION 7 — HELPER CARD RENDERER
 # ════════════════════════════════════════════════════════════════════════════
 def info_card(title, body, variant="info", tags=None):
     tag_html = ""
@@ -1111,7 +1196,7 @@ def info_card(title, body, variant="info", tags=None):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 7 — APP BODY
+# SECTION 8 — APP BODY
 # ════════════════════════════════════════════════════════════════════════════
 
 st.markdown(
@@ -1139,49 +1224,8 @@ st.markdown(
 )
 
 
-# ── Animated screen-projection headline ───────────────────────────────────
-st.markdown(
-    """
-    <div class="projection-frame">
-      <div class="projection-content">
-        <p class="projection-title">Executive Headline · Screen Projection</p>
-        <div class="projection-underline"></div>
-
-        <p class="projection-line l1">
-          <span class="hl">On-time deliveries average 4.29 stars</span>,
-          compared with <span class="hl">2.57 stars for late deliveries</span>
-          — a <span class="projection-number">1.73-star gap</span>.
-        </p>
-
-        <p class="projection-line l2">
-          Late deliveries affect
-          <span class="hl">8.1% of delivered orders</span>, averaging
-          <span class="projection-number small">9.55 days</span> beyond
-          the estimated date.
-        </p>
-
-        <p class="projection-line l3">
-          <span class="hl">Rio de Janeiro</span> has a higher late-delivery
-          rate (<span class="projection-number">13.5%</span>) than the
-          national benchmark
-          (<span class="projection-number small purple">5.9%</span>).
-        </p>
-
-        <div class="projection-priority">
-          <span class="priority-label">PRIORITY ·</span>
-          <span class="priority-text">
-            Improve delivery reliability, realistic delivery estimates,
-            proactive communication, and regional logistics.
-          </span>
-          <span class="projection-caveat">
-            These findings show an association, not proof of causation.
-          </span>
-        </div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+# ── Animated projection headline (native Streamlit composition) ───────────
+render_projection_headline()
 
 
 # ── KPI computation ────────────────────────────────────────────────────────
@@ -1189,7 +1233,7 @@ k = kpi_values(conn, selected_year, state_json)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# SECTION 8 — TABS
+# SECTION 9 — TABS
 # ════════════════════════════════════════════════════════════════════════════
 (
     tab_overview,
