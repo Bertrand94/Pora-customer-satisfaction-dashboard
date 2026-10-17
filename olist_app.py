@@ -950,11 +950,15 @@ def render_projection_headline() -> None:
     """
     Render the animated headline banner.
 
-    The three headline facts are presented as compact horizontal
-    blocks — label, headline number, and supporting detail on a single
-    row (wrapping to two lines on narrow viewports). One ``st.markdown``
-    call per block keeps CSS animations intact across Streamlit
-    versions and avoids whitespace-induced layout gaps.
+    The three facts are merged into one narrative paragraph — the
+    headline sentence, the supporting numbers, and the strategic
+    takeaway — presented as a single highlighted block. The paragraph
+    keeps the full wording the presentation is built around:
+
+        "Late deliveries cost you 1.73 stars. On-time orders average
+        4.294; late ones average 2.566. That is the single strongest
+        satisfaction driver in this dataset, and it is the insight your
+        presentation should be built around."
     """
     with st.container():
         st.markdown(
@@ -970,45 +974,23 @@ def render_projection_headline() -> None:
             unsafe_allow_html=True,
         )
 
-        # ── Block 1 — Punctuality gap ────────────────────────────────
+        # ── Merged headline paragraph ────────────────────────────────
         st.markdown(
             '<div class="projection-block b1">'
-            '<span class="block-label">Punctuality gap</span>'
-            '<span class="block-number">1.73'
-            '<span class="block-unit"> stars</span></span>'
-            '<span class="block-detail">'
-            'On-time deliveries <span class="hl">4.29</span> vs late '
-            '<span class="hl">2.57</span> — the strongest satisfaction '
-            'driver in the dataset.'
-            '</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ── Block 2 — Late-delivery exposure ─────────────────────────
-        st.markdown(
-            '<div class="projection-block b2">'
-            '<span class="block-label">Late-delivery exposure</span>'
-            '<span class="block-number">8.1'
-            '<span class="block-unit">% of delivered orders</span></span>'
-            '<span class="block-detail">'
-            'Late orders run <span class="hl">9.55 days</span> beyond '
-            'the estimated delivery date.'
-            '</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # ── Block 3 — Regional outlier ───────────────────────────────
-        st.markdown(
-            '<div class="projection-block b3">'
-            '<span class="block-label">Regional outlier</span>'
-            '<span class="block-number">13.5'
-            '<span class="block-unit">% late in RJ</span></span>'
-            '<span class="block-detail">'
-            'vs <span class="hl">5.9%</span> nationally — 2.3× the '
-            'benchmark.'
-            '</span>'
+            '<p class="headline-lead">'
+            'Late deliveries cost you '
+            '<span class="projection-number">1.73 stars</span>.'
+            '</p>'
+            '<p class="headline-support">'
+            'On-time orders average '
+            '<span class="hl">4.294</span>; late ones average '
+            '<span class="hl">2.566</span>.'
+            '</p>'
+            '<p class="headline-close">'
+            'That is the single strongest satisfaction driver in this '
+            'dataset, and it is the insight your presentation should be '
+            'built around.'
+            '</p>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1220,41 +1202,34 @@ GLOBAL_CSS: Final[str] = """
     animation: underlineSweep 1.1s ease-out 0.35s forwards;
   }
 
-  /* ── Headline fact blocks ──────────────────────────────────────── */
+  /* ── Merged headline block ─────────────────────────────────────── */
   .projection-block {
-    display: flex; align-items: baseline; flex-wrap: wrap;
-    column-gap: 14px; row-gap: 2px;
-    padding: 10px 16px; margin: 0 0 10px 0;
+    padding: 16px 22px; margin: 0 0 12px 0;
     background: rgba(255, 255, 255, 0.62);
-    border-left: 3px solid #8B5CF6; border-radius: 8px;
+    border-left: 4px solid #8B5CF6; border-radius: 8px;
     opacity: 0;
     animation: projectionFadeIn 1.0s ease-out forwards;
   }
   .projection-block.b1 { animation-delay: 0.55s; }
-  .projection-block.b2 { animation-delay: 1.15s; }
-  .projection-block.b3 { animation-delay: 1.75s; }
 
-  .projection-block .block-label {
-    font-size: 11px; font-weight: 800; letter-spacing: 0.16em;
-    text-transform: uppercase; color: #6D3FB5;
-    white-space: nowrap; flex: 0 0 auto;
+  .projection-block .headline-lead {
+    font-size: 22px; font-weight: 700; color: #3F3D56;
+    line-height: 1.45; margin: 0 0 8px 0;
   }
-  .projection-block .block-number {
-    font-size: 26px; font-weight: 800; color: #D64545;
-    line-height: 1.1; letter-spacing: -0.02em;
-    white-space: nowrap; flex: 0 0 auto;
+  .projection-block .headline-support {
+    font-size: 17px; color: #3F3D56; line-height: 1.6;
+    margin: 0 0 8px 0;
+  }
+  .projection-block .headline-close {
+    font-size: 16px; color: #4C1D95; line-height: 1.6;
+    font-style: italic; font-weight: 600; margin: 0;
+  }
+  .projection-block .hl { color: #6D3FB5; font-weight: 700; }
+
+  .projection-number {
+    display: inline-block; color: #D64545; font-size: 26px;
+    font-weight: 800; padding: 0 4px; letter-spacing: -0.01em;
     animation: numberPulse 2.4s ease-in-out infinite;
-  }
-  .projection-block .block-number .block-unit {
-    font-size: 13px; font-weight: 700; color: #6D3FB5;
-    letter-spacing: 0; margin-left: 2px; animation: none;
-  }
-  .projection-block .block-detail {
-    font-size: 15px; color: #3F3D56; line-height: 1.45;
-    flex: 1 1 auto; min-width: 0;
-  }
-  .projection-block .block-detail .hl {
-    color: #6D3FB5; font-weight: 700;
   }
 
   .projection-priority {
@@ -1279,11 +1254,9 @@ GLOBAL_CSS: Final[str] = """
     animation: projectionFadeIn 1.0s ease-out 3.1s forwards;
   }
 
-  /* Narrow screens — let the detail wrap under the number cleanly. */
   @media (max-width: 640px) {
-    .projection-block { row-gap: 4px; }
-    .projection-block .block-number { font-size: 22px; }
-    .projection-block .block-detail { flex-basis: 100%; font-size: 14px; }
+    .projection-block .headline-lead { font-size: 19px; }
+    .projection-number { font-size: 22px; }
   }
 </style>
 """
