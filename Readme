@@ -1,0 +1,78 @@
+# Customer Satisfaction Dashboard — Olist Capstone
+
+PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
+
+A Streamlit app where **every chart is filtered** by the sidebar
+**Reporting Year** and **State** selectors.
+
+## What responds to the filters
+
+| Element | Filtered? |
+|---|---|
+| Headline ("Late deliveries cost you X stars") and the 3 supporting facts | Yes |
+| KPI row (orders, delivered, avg review, late, avg delivery days) | Yes |
+| Review score distribution | Yes |
+| Monthly average review score | Yes |
+| Average review score by state (top 10) | Yes |
+| On-time vs late by state (top 5) | Yes |
+| Punctuality vs satisfaction | Yes |
+| Satisfaction by delivery-time bucket (reference line = selection average) | Yes |
+| Brazil map (selected states coloured, others greyed; year filtered) | Yes |
+| "Insight" line under every chart | Yes — recomputed from the selection |
+| Detail & Method diagnostic tables | No — whole-dataset data-quality checks |
+| Recommendations tab | No — decisions are based on the whole dataset |
+
+Every filtered query shares one definition (`FILTER_SQL` in `olist_app.py`),
+so all charts filter identically. Set both filters to **All** to reproduce
+the reference numbers.
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Data
+
+Download the Brazilian E-Commerce Public Dataset by Olist (Kaggle) and put
+these four files in a `data/` folder next to `olist_app.py`:
+
+```
+data/
+├── olist_orders_dataset.csv
+├── olist_customers_dataset.csv
+├── olist_order_items_dataset.csv
+└── olist_order_reviews_dataset.csv
+```
+
+To use a different folder: `export OLIST_DATA_DIR=/path/to/csvs`.
+
+## Run
+
+```bash
+streamlit run olist_app.py
+```
+
+## Environment variables
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `OLIST_DATA_DIR` | Folder containing the 4 CSVs | `./data` |
+| `OLIST_DB_PATH` | SQLite file the app builds | `./olist.db` |
+| `OLIST_LOG_LEVEL` | Logging level | `INFO` |
+
+## Reference numbers (filters = All)
+
+Total Orders 99,441 · Delivered 96,478 · Avg Review 4.09 · Late 7,826 ·
+Avg Delivery Days 12.56 · On-time 4.294 vs Late 2.566 (gap 1.73 stars).
+
+## Tips for the presentation
+
+- Filtered selections can be small. Read the `n=` labels before drawing
+  conclusions (see *Detail & Method → L7*).
+- Present the on-time vs late gap as an **association, not proof of
+  causation** (*Detail & Method → L1*).
+- The Brazil map downloads a public GeoJSON at runtime; it needs internet
+  access and degrades to a warning if unavailable.
