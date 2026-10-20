@@ -3,23 +3,22 @@
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
-Two dashboards in one app:
+EVERY chart responds to the sidebar filters (Reporting Year + State).
+The headline, the three supporting facts, the KPI row and every chart
+insight are recomputed from the filtered data, so numbers on screen never
+contradict the charts next to them.
 
-  📊 DATA ANALYSIS DASHBOARD — what happened?
-     Overview · Customer Satisfaction · Detail & Method
+Tabs:
+    📊 Overview               — KPI row + review-score distribution
+    📊 Customer Satisfaction  — monthly trend, state scores, on-time vs late,
+                                punctuality vs satisfaction, delivery
+                                buckets, Brazil map
+    📊 Detail & Method        — limitations + whole-dataset diagnostics
+    🎯 Recommendations        — prioritised actions (whole dataset)
 
-  🎯 DECISION DASHBOARD — what should we do?
-     Recommendations (with live scorecard) · Priorities & Ownership ·
-     Decision Record
-
-Chart map (each chart appears exactly once):
-     Review score distribution          → Overview tab (unfiltered)
-     Monthly average review score       → Customer Satisfaction tab
-     Average review score by state      → Customer Satisfaction tab
-     On-time vs late by state           → Customer Satisfaction tab
-     Punctuality vs satisfaction        → Customer Satisfaction tab (advanced · Q6)
-     Satisfaction by delivery bucket    → Customer Satisfaction tab (bonus · Q9)
-     Brazil map (top-10 states)         → Customer Satisfaction tab (bonus)
+Headline (visible above the tabs, on every tab, filter-aware):
+    "Late deliveries cost you X stars. On-time orders average A; late ones
+    average B."   (filters = All → 1.73 stars · 4.294 vs 2.566)
 
 Data tables loaded (4 — the minimum Group 1 requires):
     orders, customers, order_items, reviews
@@ -70,6 +69,7 @@ class Palette:
     green:        str = "#16A34A"
     blue:         str = "#0EA5E9"
     grey:         str = "#9CA3AF"
+    slate:        str = "#3F3F5A"
 
 
 @dataclass(frozen=True)
@@ -108,15 +108,6 @@ class Config:
     reference_star_gap:          Final[float] = 1.73
     reference_avg_days_late:     Final[float] = 9.55
 
-    # Decision-scorecard targets — ILLUSTRATIVE. Replace with targets agreed
-    # with the business before presenting.
-    target_late_rate:      Final[float] = 0.06   # national late-delivery rate
-    target_rj_late_rate:   Final[float] = 0.08   # Rio de Janeiro late rate
-    target_avg_score:      Final[float] = 4.20   # average review score
-    target_over20_share:   Final[float] = 0.04   # share of orders > 20 days
-    scorecard_tolerance:   Final[float] = 0.10   # within 10% of target = amber
-    big_state_min_orders:  Final[int]   = 2_000  # "large state" cut-off
-
     all_states: Final[tuple[str, ...]] = (
         "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
         "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN",
@@ -144,6 +135,7 @@ class Config:
     delivery_bucket_order: Final[tuple[str, ...]] = (
         "0-5 days", "6-10 days", "11-20 days", "21-30 days", "30+ days",
     )
+    min_reviews_per_month: Final[int] = 30   # below this a month is "noisy"
 
 
 CONFIG  = Config()
@@ -240,7 +232,29 @@ def build_connection() -> sqlite3.Connection:
     return conn
 
 
-# ── Filter contract helpers ────────────────────────────────────────────────
+# ── Filter contract ────────────────────────────────────────────────────────
+#
+# Every query that touches orders (alias `o`) and customers (alias `c`)
+# appends FILTER_SQL to its WHERE clause and passes year_multi(...) as its
+# four parameters. One definition → every chart filters identically.
+
+FILTER_SQL: Final[str] = """
+          (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
+          AND (? = '[]' OR c.customer_state IN
+                        (SELECT value FROM json_each(?)))
+"""
+
+# Year-only variant (used by the map, which draws non-selected states grey
+# instead of dropping them).
+YEAR_SQL: Final[str] = """
+          (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
+"""
+
+DELIVERED_SQL: Final[str] = """
+          o.order_status = 'delivered'
+          AND o.order_delivered_customer_date IS NOT NULL
+"""
+
 
 def year_params(year: str) -> tuple[str, str]:
     return (year, year)
@@ -265,6 +279,21 @@ def safe_state_json(raw_states: Iterable[Any] | None) -> str:
     except (TypeError, ValueError) as exc:
         _LOGGER.warning("safe_state_json fallback to []: %s", exc)
         return "[]"
+
+
+def selected_states(state_json: str) -> list[str]:
+    try:
+        parsed = json.loads(state_json) if state_json else []
+    except (TypeError, json.JSONDecodeError):
+        return []
+    return [s for s in parsed if isinstance(s, str)]
+
+
+def scope_label(year: str, state_json: str) -> str:
+    """Human-readable description of the active filters."""
+    years  = "All years" if year == "All" else year
+    states = selected_states(state_json)
+    return f"{years} · {', '.join(states) if states else 'All states'}"
 
 
 def safe_query(
@@ -301,25 +330,21 @@ def fmt_float(value: Any, places: int = 2) -> str:
 
 
 def fmt_pct(value: Any, places: int = 1) -> str:
-    """Format a fraction (0.081) as a percentage string ('8.1%')."""
+    """Format a fraction (0.081) as '8.1%'."""
     return "—" if value is None else f"{100 * value:.{places}f}%"
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §4  KPI COMPUTATION  — Q1  +  LIVE DECISION FACTS
+# §4  KPI + HEADLINE COMPUTATION  (all filter-aware)
 # ════════════════════════════════════════════════════════════════════════════
 
 def query_kpis(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> dict[str, Any]:
-    """Q1 — headline KPIs. Filters = All reproduces the README table.
-
-    Every KPI (including the average review score) responds to the Year and
-    State filters.
-    """
+    """Q1 — headline KPIs. Filters = All reproduces the README table."""
     params = year_multi(year, state_json)
 
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT COUNT(DISTINCT o.order_id) AS total_orders,
                COUNT(DISTINCT CASE WHEN o.order_status = 'delivered'
                                     THEN o.order_id END) AS delivered_orders,
@@ -334,19 +359,15 @@ def query_kpis(
                               END), 2) AS avg_delivery_days
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
-        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {FILTER_SQL}
     """, params=params, label="KPI row")
 
-    score_df = safe_query(conn, """
+    score_df = safe_query(conn, f"""
         SELECT ROUND(AVG(CAST(r.review_score AS REAL)), 2) AS avg_review_score
         FROM reviews r
         JOIN orders o    ON r.order_id = o.order_id
         JOIN customers c ON o.customer_id = c.customer_id
-        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {FILTER_SQL}
     """, params=params, label="KPI avg review score")
 
     return {
@@ -358,157 +379,115 @@ def query_kpis(
     }
 
 
-@st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
-def query_decision_facts(_conn: sqlite3.Connection) -> dict[str, Any]:
-    """Whole-dataset (unfiltered) facts that drive the Decision Dashboard.
+def query_headline(
+    conn: sqlite3.Connection, year: str, state_json: str
+) -> dict[str, Any]:
+    """Headline story + three supporting facts for the current selection."""
+    params = year_multi(year, state_json)
 
-    The decision dashboard is deliberately NOT filtered: a decision rests on
-    the full picture, and the numbers must not change when someone moves a
-    sidebar filter.
-    """
-    facts: dict[str, Any] = {
-        "delivered_with_date": None, "late_orders": None,
-        "national_late_rate": None,
-        "rj_delivered": None, "rj_late_rate": None, "rj_avg_score": None,
-        "ba_orders": None, "ba_avg_score": None, "ba_is_lowest": False,
-        "national_avg_score": None,
-        "over20_share": None, "avg_days_late": None,
-        "worst_days_late": None,
-    }
+    split = safe_query(conn, f"""
+        SELECT ROUND(AVG(CASE WHEN o.order_delivered_customer_date
+                                   <= o.order_estimated_delivery_date
+                              THEN CAST(r.review_score AS REAL) END), 3)
+                   AS on_time_avg,
+               ROUND(AVG(CASE WHEN o.order_delivered_customer_date
+                                   > o.order_estimated_delivery_date
+                              THEN CAST(r.review_score AS REAL) END), 3)
+                   AS late_avg
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+        JOIN reviews r  ON o.order_id  = r.order_id
+        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
+    """, params=params, label="headline split")
 
-    states = safe_query(_conn, """
-        SELECT c.customer_state AS state,
-               COUNT(DISTINCT o.order_id) AS delivered,
+    lateness = safe_query(conn, f"""
+        SELECT COUNT(DISTINCT o.order_id) AS delivered,
                SUM(CASE WHEN o.order_delivered_customer_date
-                            > o.order_estimated_delivery_date
-                        THEN 1 ELSE 0 END) AS late
+                             > o.order_estimated_delivery_date
+                        THEN 1 ELSE 0 END) AS late_orders,
+               ROUND(AVG(CASE WHEN o.order_delivered_customer_date
+                                   > o.order_estimated_delivery_date
+                              THEN julianday(o.order_delivered_customer_date)
+                                 - julianday(o.order_estimated_delivery_date)
+                              END), 2) AS avg_days_late,
+               ROUND(MAX(CASE WHEN o.order_delivered_customer_date
+                                   > o.order_estimated_delivery_date
+                              THEN julianday(o.order_delivered_customer_date)
+                                 - julianday(o.order_estimated_delivery_date)
+                              END), 0) AS worst_days_late
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
-        WHERE o.order_status = 'delivered'
-          AND o.order_delivered_customer_date IS NOT NULL
-        GROUP BY state
-    """, label="decision: late rate by state")
+        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
+    """, params=params, label="headline lateness")
 
-    if not states.empty:
-        total_delivered = int(states["delivered"].sum())
-        total_late      = int(states["late"].sum())
-        facts["delivered_with_date"] = total_delivered
-        facts["late_orders"]         = total_late
-        if total_delivered:
-            facts["national_late_rate"] = total_late / total_delivered
-        rj = states[states["state"] == "RJ"]
-        if not rj.empty and int(rj.iloc[0]["delivered"]) > 0:
-            facts["rj_delivered"] = int(rj.iloc[0]["delivered"])
-            facts["rj_late_rate"] = (
-                float(rj.iloc[0]["late"]) / facts["rj_delivered"]
-            )
-
-    scores = safe_query(_conn, """
-        SELECT c.customer_state AS state,
-               COUNT(DISTINCT o.order_id) AS orders,
-               AVG(CAST(r.review_score AS REAL)) AS avg_score
-        FROM orders o
+    fanout = safe_query(conn, f"""
+        SELECT COUNT(*) AS review_rows,
+               COUNT(DISTINCT r.order_id) AS distinct_orders
+        FROM reviews r
+        JOIN orders o    ON r.order_id = o.order_id
         JOIN customers c ON o.customer_id = c.customer_id
-        JOIN reviews r  ON o.order_id = r.order_id
-        GROUP BY state
-    """, label="decision: score by state")
+        WHERE {FILTER_SQL}
+    """, params=params, label="headline fan-out")
 
-    if not scores.empty:
-        by_state = scores.set_index("state")
-        if "RJ" in by_state.index:
-            facts["rj_avg_score"] = float(by_state.loc["RJ", "avg_score"])
-        if "BA" in by_state.index:
-            facts["ba_avg_score"] = float(by_state.loc["BA", "avg_score"])
-            facts["ba_orders"]    = int(by_state.loc["BA", "orders"])
-        big = scores[scores["orders"] >= CONFIG.big_state_min_orders]
-        if not big.empty:
-            lowest = big.loc[big["avg_score"].idxmin(), "state"]
-            facts["ba_is_lowest"] = (lowest == "BA")
+    on_time = safe_scalar(split, "on_time_avg")
+    late    = safe_scalar(split, "late_avg")
+    delivered   = safe_scalar(lateness, "delivered", 0)
+    late_orders = safe_scalar(lateness, "late_orders", 0)
 
-    overall = safe_query(_conn, """
-        SELECT AVG(CAST(review_score AS REAL)) AS avg_score FROM reviews
-    """, label="decision: overall score")
-    val = safe_scalar(overall, "avg_score")
-    facts["national_avg_score"] = None if val is None else float(val)
-
-    tail = safe_query(_conn, """
-        SELECT COUNT(*) AS n,
-               SUM(CASE WHEN julianday(order_delivered_customer_date)
-                            - julianday(order_purchase_timestamp) > 20
-                        THEN 1 ELSE 0 END) AS over20
-        FROM orders
-        WHERE order_status = 'delivered'
-          AND order_delivered_customer_date IS NOT NULL
-    """, label="decision: day-20 tail")
-    n = safe_scalar(tail, "n", 0)
-    if n:
-        facts["over20_share"] = float(safe_scalar(tail, "over20", 0)) / n
-
-    late = safe_query(_conn, """
-        SELECT ROUND(AVG(julianday(order_delivered_customer_date)
-                       - julianday(order_estimated_delivery_date)), 2)
-                   AS avg_days_late,
-               ROUND(MAX(julianday(order_delivered_customer_date)
-                       - julianday(order_estimated_delivery_date)), 0)
-                   AS worst_days_late
-        FROM orders
-        WHERE order_status = 'delivered'
-          AND order_delivered_customer_date > order_estimated_delivery_date
-    """, label="decision: days late")
-    facts["avg_days_late"]   = safe_scalar(late, "avg_days_late")
-    facts["worst_days_late"] = safe_scalar(late, "worst_days_late")
-
-    return facts
-
-
-def rag_status(
-    value: float | None,
-    target: float,
-    *,
-    higher_is_better: bool,
-    tolerance: float = CONFIG.scorecard_tolerance,
-) -> tuple[str, str]:
-    """Return (css_class, label) — green / amber / red / grey."""
-    if value is None:
-        return "grey", "No data"
-    if higher_is_better:
-        if value >= target:
-            return "green", "On target"
-        if value >= target * (1 - tolerance):
-            return "amber", "Near target"
-        return "red", "Off target"
-    if value <= target:
-        return "green", "On target"
-    if value <= target * (1 + tolerance):
-        return "amber", "Near target"
-    return "red", "Off target"
+    return {
+        "on_time_avg":     on_time,
+        "late_avg":        late,
+        "gap":             (on_time - late)
+                           if on_time is not None and late is not None
+                           else None,
+        "delivered":       delivered,
+        "late_orders":     late_orders,
+        "late_share":      (late_orders / delivered) if delivered else None,
+        "avg_days_late":   safe_scalar(lateness, "avg_days_late"),
+        "worst_days_late": safe_scalar(lateness, "worst_days_late"),
+        "review_rows":     safe_scalar(fanout, "review_rows", 0),
+        "distinct_orders": safe_scalar(fanout, "distinct_orders", 0),
+    }
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §5  CHART FUNCTIONS  (each chart appears exactly once)
+# §5  CHART FUNCTIONS  (each chart appears exactly once — all filtered)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _no_data_notice(msg: str = "No data for the current filters.") -> None:
     st.info(f"ℹ️ {msg} Try widening the Year or State filters.")
 
 
-# ── Review score distribution (Q2 · Overview · unfiltered) ────────────────
+def _insight(year: str, state_json: str, text: str) -> None:
+    st.caption(
+        f"**Selection:** {scope_label(year, state_json)}  ·  "
+        f"**Insight.** {text}"
+    )
 
-def chart_review_distribution(conn: sqlite3.Connection) -> None:
-    """Whole-dataset structural fact — intentionally unfiltered."""
-    st.markdown("### Review Score Distribution *(whole dataset)*")
-    df = safe_query(conn, """
-        SELECT CAST(review_score AS INTEGER) AS score,
-               COUNT(*) AS reviews,
-               ROUND(100.0 * COUNT(*) / (SELECT COUNT(*) FROM reviews), 1) AS pct
-        FROM reviews
+
+# ── Review score distribution (Q2 · Overview) ─────────────────────────────
+
+def chart_review_distribution(
+    conn: sqlite3.Connection, year: str, state_json: str
+) -> None:
+    st.markdown("### Review Score Distribution")
+    df = safe_query(conn, f"""
+        SELECT CAST(r.review_score AS INTEGER) AS score,
+               COUNT(*) AS reviews
+        FROM reviews r
+        JOIN orders o    ON r.order_id = o.order_id
+        JOIN customers c ON o.customer_id = c.customer_id
+        WHERE {FILTER_SQL}
         GROUP BY 1
         ORDER BY 1
-    """, label="review distribution")
+    """, params=year_multi(year, state_json), label="review distribution")
 
     if df.empty:
-        _no_data_notice("No reviews in the dataset.")
+        _no_data_notice()
         return
+
+    total = int(df["reviews"].sum())
+    df["pct"] = 100.0 * df["reviews"] / total
 
     shades = [
         PALETTE.purple_dark if s == 5
@@ -520,9 +499,10 @@ def chart_review_distribution(conn: sqlite3.Connection) -> None:
     fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
                                     CONFIG.chart_height_short))
     bars = ax.bar(df["score"].astype(str), df["reviews"], color=shades)
-    ax.set_title("Review Score Distribution (whole dataset)")
+    ax.set_title("Review Score Distribution")
     ax.set_xlabel("Review score (stars)")
     ax.set_ylabel("Number of reviews")
+    ax.set_ylim(0, df["reviews"].max() * 1.12)
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
     for bar, pct in zip(bars, df["pct"]):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
@@ -531,28 +511,32 @@ def chart_review_distribution(conn: sqlite3.Connection) -> None:
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
-    st.caption(
-        "**Insight.** Bimodal — 57.8% of reviews are 5★, 11.5% are 1★. "
-        "Deliberately unfiltered: a whole-dataset structural fact."
+
+    def share(score: int) -> float:
+        row = df.loc[df["score"] == score, "pct"]
+        return float(row.iloc[0]) if not row.empty else 0.0
+
+    _insight(
+        year, state_json,
+        f"{share(5):.1f}% of the {total:,} reviews are 5★ and "
+        f"{share(1):.1f}% are 1★.",
     )
 
 
-# ── Monthly average score (Q3 · filterable) ───────────────────────────────
+# ── Monthly average score (Q3) ────────────────────────────────────────────
 
 def chart_monthly_score(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown("### Monthly Average Review Score")
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT strftime('%Y-%m', o.order_purchase_timestamp) AS month,
                COUNT(*) AS reviews,
                ROUND(AVG(CAST(r.review_score AS REAL)), 3) AS avg_score
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {FILTER_SQL}
         GROUP BY month
         ORDER BY month
     """, params=year_multi(year, state_json), label="monthly score")
@@ -568,26 +552,47 @@ def chart_monthly_score(
     ax.set_title("Monthly Average Review Score")
     ax.set_xlabel("Month")
     ax.set_ylabel("Avg review score (1–5)")
-    ax.set_ylim(3.5, 4.6)
+
+    lo = max(1.0, float(df["avg_score"].min()) - 0.2)
+    hi = min(5.0, float(df["avg_score"].max()) + 0.2)
+    if hi - lo < 0.5:
+        mid = (hi + lo) / 2
+        lo, hi = max(1.0, mid - 0.25), min(5.0, mid + 0.25)
+    ax.set_ylim(lo, hi)
     plt.xticks(rotation=45, ha="right")
 
-    if "2017-11" in df["month"].values:
-        nov = df.loc[df["month"] == "2017-11", "avg_score"].iloc[0]
-        ax.scatter(["2017-11"], [nov], s=160, color=PALETTE.red, zorder=5,
-                   edgecolor="white", linewidth=1.8)
-        ax.annotate(
-            f"Nov 2017\n{nov:.2f}",
-            xy=("2017-11", nov), xytext=(-55, -35),
-            textcoords="offset points",
-            arrowprops=dict(arrowstyle="->", color=PALETTE.grey, lw=1.2),
-            fontsize=10, color=PALETTE.red, fontweight="bold",
-        )
+    low_idx    = df["avg_score"].idxmin()
+    low_month  = df.loc[low_idx, "month"]
+    low_score  = float(df.loc[low_idx, "avg_score"])
+    high_idx   = df["avg_score"].idxmax()
+    high_month = df.loc[high_idx, "month"]
+    high_score = float(df.loc[high_idx, "avg_score"])
+
+    ax.scatter([low_month], [low_score], s=160, color=PALETTE.red, zorder=5,
+               edgecolor="white", linewidth=1.8)
+    ax.annotate(
+        f"Lowest\n{low_month}\n{low_score:.2f}",
+        xy=(low_month, low_score), xytext=(0, -42),
+        textcoords="offset points", ha="center",
+        arrowprops=dict(arrowstyle="->", color=PALETTE.grey, lw=1.2),
+        fontsize=10, color=PALETTE.red, fontweight="bold",
+    )
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
-    st.caption(
-        "**Insight.** Scores hold in the 4.0–4.2 band except Nov 2017. "
-        "Nov 2016 is empty — zero orders that month; the gap is real."
+
+    noisy = int((df["reviews"] < CONFIG.min_reviews_per_month).sum())
+    note = (
+        f" {noisy} month(s) have fewer than "
+        f"{CONFIG.min_reviews_per_month} reviews, so their averages are "
+        "noisy."
+        if noisy else ""
+    )
+    _insight(
+        year, state_json,
+        f"Lowest month {low_month} ({low_score:.2f}); highest "
+        f"{high_month} ({high_score:.2f}). Months with no orders in the "
+        f"selection are skipped, not zero.{note}",
     )
 
 
@@ -599,16 +604,14 @@ def chart_state_scores(
     st.markdown(
         "### Average Review Score by State *(top 10 by orders)*"
     )
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
                ROUND(AVG(CAST(r.review_score AS REAL)), 3) AS avg_score
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {FILTER_SQL}
         GROUP BY state
         ORDER BY orders DESC
         LIMIT 10
@@ -634,10 +637,18 @@ def chart_state_scores(
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
-    st.caption(
-        "**Insight.** BA (3.86) and RJ (3.88) anchor the low end; "
-        "PR (4.18) and SP (4.17) the high end."
-    )
+
+    low  = plot_df.iloc[0]
+    high = plot_df.iloc[-1]
+    if len(plot_df) == 1:
+        text = f"{low['state']} averages {low['avg_score']:.2f} stars."
+    else:
+        text = (
+            f"{low['state']} ({low['avg_score']:.2f}) anchors the low "
+            f"end; {high['state']} ({high['avg_score']:.2f}) the high end "
+            f"— a spread of {high['avg_score'] - low['avg_score']:.2f} stars."
+        )
+    _insight(year, state_json, text)
 
 
 # ── On-time vs late by state (Q5 · grouped bar) ───────────────────────────
@@ -648,7 +659,7 @@ def chart_ontime_by_state(
     st.markdown(
         "### On-Time vs Late Deliveries by State *(top 5)*"
     )
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS delivered,
                SUM(CASE WHEN o.order_delivered_customer_date
@@ -659,11 +670,7 @@ def chart_ontime_by_state(
                         THEN 1 ELSE 0 END) AS on_time
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
-        WHERE o.order_status = 'delivered'
-          AND o.order_delivered_customer_date IS NOT NULL
-          AND (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
         GROUP BY state
         ORDER BY delivered DESC
         LIMIT 5
@@ -691,13 +698,26 @@ def chart_ontime_by_state(
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
-    facts = query_decision_facts(conn)
-    st.caption(
-        f"**Insight.** Whole-dataset late rate: RJ "
-        f"**{fmt_pct(facts['rj_late_rate'])}** vs "
-        f"**{fmt_pct(facts['national_late_rate'])}** nationally. "
-        "The bars above respond to the filters; these two rates do not."
-    )
+    df = df.assign(late_rate=100.0 * df["late"] / df["delivered"])
+    worst = df.loc[df["late_rate"].idxmax()]
+    best  = df.loc[df["late_rate"].idxmin()]
+    total_delivered = int(df["delivered"].sum())
+    total_late      = int(df["late"].sum())
+    overall = 100.0 * total_late / total_delivered if total_delivered else 0.0
+    if len(df) == 1:
+        text = (
+            f"{worst['state']}: {int(worst['late']):,} of "
+            f"{int(worst['delivered']):,} delivered orders were late "
+            f"({worst['late_rate']:.1f}%)."
+        )
+    else:
+        text = (
+            f"Across the states shown, {overall:.1f}% of delivered orders "
+            f"were late. {worst['state']} is highest "
+            f"({worst['late_rate']:.1f}%), {best['state']} lowest "
+            f"({best['late_rate']:.1f}%)."
+        )
+    _insight(year, state_json, text)
 
 
 # ── Punctuality vs satisfaction (Q6 · advanced feature) ───────────────────
@@ -708,7 +728,7 @@ def chart_punctuality_vs_satisfaction(
     st.markdown(
         "### Delivery Punctuality vs Satisfaction *(advanced feature · Q6)*"
     )
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT CASE WHEN o.order_delivered_customer_date
                          <= o.order_estimated_delivery_date
                     THEN 'On Time' ELSE 'Late' END AS delivery_status,
@@ -720,11 +740,7 @@ def chart_punctuality_vs_satisfaction(
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE o.order_status = 'delivered'
-          AND o.order_delivered_customer_date IS NOT NULL
-          AND (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
         GROUP BY 1
         ORDER BY avg_score DESC
     """, params=year_multi(year, state_json),
@@ -743,7 +759,7 @@ def chart_punctuality_vs_satisfaction(
     ax.set_title("Delivery Punctuality vs Satisfaction")
     ax.set_xlabel("")
     ax.set_ylabel("Avg review score (1–5)")
-    ax.set_ylim(2, 4.8)
+    ax.set_ylim(1, 5.4)
     for bar, score, n, days in zip(
         bars, df["avg_score"], df["orders"], df["avg_delivery_days"]
     ):
@@ -753,11 +769,21 @@ def chart_punctuality_vs_satisfaction(
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
-    st.caption(
-        "**Insight.** Late deliveries cost **1.73 stars** — 4.29 on-time "
-        "vs 2.57 late. The single strongest satisfaction driver in the "
-        "dataset."
-    )
+
+    scores = dict(zip(df["delivery_status"], df["avg_score"]))
+    if "On Time" in scores and "Late" in scores:
+        gap = scores["On Time"] - scores["Late"]
+        text = (
+            f"Late deliveries cost **{gap:.2f} stars** — "
+            f"{scores['On Time']:.2f} on time vs {scores['Late']:.2f} late."
+        )
+    else:
+        only = next(iter(scores))
+        text = (
+            f"Only {only.lower()} orders exist in this selection, so no "
+            "on-time vs late gap can be computed."
+        )
+    _insight(year, state_json, text)
 
 
 # ── Delivery buckets (Q9 · bonus) ─────────────────────────────────────────
@@ -768,7 +794,7 @@ def chart_satisfaction_by_delivery_bucket(
     st.markdown(
         "### Satisfaction by Delivery-Time Bucket *(bonus · Q9)*"
     )
-    df = safe_query(conn, """
+    df = safe_query(conn, f"""
         SELECT CASE
                  WHEN julianday(o.order_delivered_customer_date)
                       - julianday(o.order_purchase_timestamp) <= 5
@@ -784,15 +810,12 @@ def chart_satisfaction_by_delivery_bucket(
                    THEN '21-30 days'
                  ELSE '30+ days' END AS delivery_bucket,
                COUNT(DISTINCT o.order_id) AS orders,
+               COUNT(*) AS review_rows,
                ROUND(AVG(CAST(r.review_score AS REAL)), 3) AS avg_score
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE o.order_status = 'delivered'
-          AND o.order_delivered_customer_date IS NOT NULL
-          AND (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
-          AND (? = '[]' OR c.customer_state IN
-                        (SELECT value FROM json_each(?)))
+        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
         GROUP BY 1
         ORDER BY CASE delivery_bucket
                    WHEN '0-5 days'   THEN 1
@@ -806,11 +829,21 @@ def chart_satisfaction_by_delivery_bucket(
         _no_data_notice()
         return
 
-    gradient = [
-        PALETTE.purple_dark, PALETTE.purple,
-        "#A78BFA", "#F0A0A0", PALETTE.red,
-    ]
-    colors = gradient[: len(df)]
+    # Reference line = the average of the CURRENT selection, not a
+    # whole-dataset constant.
+    selection_avg = float(
+        (df["avg_score"] * df["review_rows"]).sum() / df["review_rows"].sum()
+    )
+
+    palette_by_bucket = {
+        "0-5 days":   PALETTE.purple_dark,
+        "6-10 days":  PALETTE.purple,
+        "11-20 days": "#A78BFA",
+        "21-30 days": "#F0A0A0",
+        "30+ days":   PALETTE.red,
+    }
+    colors = [palette_by_bucket.get(b, PALETTE.grey)
+              for b in df["delivery_bucket"]]
 
     fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
                                     CONFIG.chart_height))
@@ -818,10 +851,10 @@ def chart_satisfaction_by_delivery_bucket(
     ax.set_title("Satisfaction by Delivery-Time Bucket")
     ax.set_xlabel("Days from purchase to delivery")
     ax.set_ylabel("Avg review score (1–5)")
-    ax.set_ylim(1, 5)
-    ax.axhline(CONFIG.reference_national_avg, color=PALETTE.grey,
-               linestyle="--", linewidth=1,
-               label=f"National avg {CONFIG.reference_national_avg}")
+    ax.set_ylim(1, 5.4)
+    ax.axhline(selection_avg, color=PALETTE.grey, linestyle="--",
+               linewidth=1,
+               label=f"Selection avg {selection_avg:.2f}")
     ax.legend(loc="lower left", frameon=False)
     for bar, score, n in zip(bars, df["avg_score"], df["orders"]):
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
@@ -830,11 +863,28 @@ def chart_satisfaction_by_delivery_bucket(
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
-    st.caption(
-        "**Insight.** Smooth decline, not a cliff: 4.45 → 4.36 → 4.22 "
-        "→ 3.69 → 2.26. Every bucket past 20 days falls below the 4.09 "
-        "national average — the case for a 20-day SLA."
-    )
+
+    if len(df) == 1:
+        text = (
+            f"All delivered orders in this selection fall in the "
+            f"{df.iloc[0]['delivery_bucket']} bucket "
+            f"({df.iloc[0]['avg_score']:.2f} stars)."
+        )
+    else:
+        first, last = df.iloc[0], df.iloc[-1]
+        below = df.loc[df["avg_score"] < selection_avg, "delivery_bucket"]
+        below_txt = (
+            "Buckets below the selection average: "
+            + ", ".join(below) + "."
+            if not below.empty else
+            "No bucket falls below the selection average."
+        )
+        text = (
+            f"Scores run from {first['avg_score']:.2f} "
+            f"({first['delivery_bucket']}) to {last['avg_score']:.2f} "
+            f"({last['delivery_bucket']}). {below_txt}"
+        )
+    _insight(year, state_json, text)
 
 
 # ── Brazil map (Q4 · bonus) ───────────────────────────────────────────────
@@ -876,73 +926,56 @@ def state_centroids() -> dict[str, tuple[float, float]]:
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        "### Brazil Map — Avg Review Score "
-        "*(top 10 states by volume · bonus)*"
-    )
-    df = safe_query(conn, """
+    st.markdown("### Brazil Map — Avg Review Score")
+    df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
                ROUND(AVG(CAST(r.review_score AS REAL)), 3) AS avg_score
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
+        WHERE {YEAR_SQL}
         GROUP BY state
-        ORDER BY orders DESC
-        LIMIT 10
     """, params=year_params(year), label="Brazil map")
 
     if df.empty:
         _no_data_notice("No state-level data for this year.")
         return
 
-    try:
-        selected = json.loads(state_json) if state_json else []
-    except (TypeError, json.JSONDecodeError):
-        selected = []
+    selected      = selected_states(state_json)
     filter_active = len(selected) > 0
 
-    top10       = df["state"].tolist()
-    keep_states = (
-        sorted(set(top10) | set(selected)) if filter_active else top10
-    )
+    if filter_active:
+        colored = df[df["state"].isin(selected)].copy()
+        greyed  = df[~df["state"].isin(selected)].copy()
+        if colored.empty:
+            _no_data_notice("The selected states have no reviewed orders "
+                            "in this period.")
+            return
+        mode_note = "Selected states are coloured; the rest are greyed out."
+    else:
+        colored = df.nlargest(10, "orders").copy()
+        greyed  = df.iloc[0:0].copy()
+        mode_note = "Showing the 10 states with the most orders."
 
-    grid = pd.DataFrame({"state": keep_states}).merge(
-        df[["state", "orders", "avg_score"]], on="state", how="left",
-    )
-    grid["orders"]    = grid["orders"].fillna(0).astype(int)
-    grid["avg_score"] = grid["avg_score"].fillna(0)
-
-    grid["display_score"] = (
-        grid.apply(
-            lambda r: r["avg_score"] if r["state"] in selected else -1,
-            axis=1,
-        ) if filter_active else grid["avg_score"]
-    )
-    grid["hover"] = grid.apply(
-        lambda r: (
-            "Not in current filter" if filter_active and r["state"] not in selected
-            else "No orders"        if r["orders"] == 0
-            else f"{r['avg_score']:.2f} avg · {r['orders']:,} orders"
-        ),
+    colored["display_score"] = colored["avg_score"]
+    colored["hover"] = colored.apply(
+        lambda r: f"{r['avg_score']:.2f} avg · {int(r['orders']):,} orders",
         axis=1,
     )
+    greyed["display_score"] = -1.0
+    greyed["hover"] = "Not in current filter"
+    grid = pd.concat([colored, greyed], ignore_index=True)
 
     centroids = state_centroids()
-    grid["lat"] = grid["state"].map(lambda s: centroids.get(s, (None, None))[0])
-    grid["lon"] = grid["state"].map(lambda s: centroids.get(s, (None, None))[1])
-
-    label_df = (
-        grid[grid["state"].isin(selected)] if filter_active else grid
-    ).dropna(subset=["lat", "lon"])
-    label_df = label_df.assign(
-        label=label_df.apply(
-            lambda r: (f"{r['state']}\n{r['avg_score']:.2f}"
-                       if r["orders"] > 0 else r["state"]),
-            axis=1,
-        )
-    ) if not label_df.empty else label_df
+    colored["lat"] = colored["state"].map(
+        lambda s: centroids.get(s, (None, None))[0])
+    colored["lon"] = colored["state"].map(
+        lambda s: centroids.get(s, (None, None))[1])
+    label_df = colored.dropna(subset=["lat", "lon"]).copy()
+    label_df["label"] = label_df.apply(
+        lambda r: f"{r['state']}\n{r['avg_score']:.2f}", axis=1,
+    )
 
     try:
         geojson = load_brazil_geojson()
@@ -951,11 +984,35 @@ def chart_brazil_map(
         st.warning("⚠️ The Brazil map is temporarily unavailable.")
         return
 
-    color_scale = [
-        [0.00, "#3F3F5A"], [0.05, "#3F3F5A"], [0.10, "#B83232"],
-        [0.45, "#F0A0A0"], [0.65, PALETTE.purple_light],
-        [1.00, PALETTE.purple_dark],
-    ]
+    # Colour range is derived from the data on screen, so contrast stays
+    # readable whichever states / year are selected.
+    lo_c = max(0.5, float(colored["avg_score"].min()) - 0.05)
+    hi_c = float(colored["avg_score"].max()) + 0.05
+    if hi_c - lo_c < 0.1:
+        hi_c = lo_c + 0.1
+    ticks = [round(lo_c + (hi_c - lo_c) * i / 4, 2) for i in range(5)]
+
+    has_grey = not greyed.empty
+    if has_grey:
+        range_color = (-1.0, hi_c)
+        a = (lo_c + 1.0) / (hi_c + 1.0)
+        color_scale = [
+            [0.0, PALETTE.slate], [a * 0.999, PALETTE.slate],
+            [a, PALETTE.red],
+            [a + (1 - a) * 0.35, PALETTE.red_light],
+            [a + (1 - a) * 0.65, PALETTE.purple_light],
+            [1.0, PALETTE.purple_dark],
+        ]
+        tickvals = [-1.0, *ticks]
+        ticktext = ["Not selected", *[f"{t:.2f}" for t in ticks]]
+    else:
+        range_color = (lo_c, hi_c)
+        color_scale = [
+            [0.0, PALETTE.red], [0.35, PALETTE.red_light],
+            [0.65, PALETTE.purple_light], [1.0, PALETTE.purple_dark],
+        ]
+        tickvals = ticks
+        ticktext = [f"{t:.2f}" for t in ticks]
 
     try:
         fig = px.choropleth(
@@ -965,7 +1022,7 @@ def chart_brazil_map(
             featureidkey="properties.sigla",
             color="display_score",
             color_continuous_scale=color_scale,
-            range_color=(-1, 4.3),
+            range_color=range_color,
             scope="south america",
             labels={"display_score": "Avg review score",
                     "state": "State", "orders": "Orders"},
@@ -993,7 +1050,7 @@ def chart_brazil_map(
         )
         fig.update_layout(
             title=dict(
-                text="Average Review Score — Top 10 States (Brazil)",
+                text=f"Average Review Score — {scope_label(year, state_json)}",
                 x=0.5, xanchor="center",
                 font=dict(size=14, color=PALETTE.purple_dark,
                           family="sans-serif"),
@@ -1006,9 +1063,7 @@ def chart_brazil_map(
                 tickfont=dict(color=PALETTE.purple_dark),
                 title_font=dict(color=PALETTE.purple_dark),
                 thickness=14, len=0.7,
-                tickvals=[-1, 3.9, 4.0, 4.1, 4.2, 4.3],
-                ticktext=["Not selected", "3.9", "4.0", "4.1",
-                          "4.2", "4.3"],
+                tickvals=tickvals, ticktext=ticktext,
             ),
             font=dict(family="sans-serif", color="#3F3D56"),
             height=620,
@@ -1019,12 +1074,17 @@ def chart_brazil_map(
         st.warning("⚠️ The map could not be rendered for this selection.")
         return
 
-    st.caption(
-        "**Insight.** Top 10 states by order volume. BA (3.86) and RJ "
-        "(3.88) anchor the low end; PR (4.18) and SP (4.17) hold the "
-        "high end. RJ's low score against its wealthier Southeast "
-        "neighbours signals an operational problem."
-    )
+    low  = colored.loc[colored["avg_score"].idxmin()]
+    high = colored.loc[colored["avg_score"].idxmax()]
+    if len(colored) == 1:
+        text = f"{low['state']} averages {low['avg_score']:.2f} stars. {mode_note}"
+    else:
+        text = (
+            f"{low['state']} ({low['avg_score']:.2f}) is lowest and "
+            f"{high['state']} ({high['avg_score']:.2f}) highest among the "
+            f"coloured states. {mode_note}"
+        )
+    _insight(year, state_json, text)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1052,42 +1112,6 @@ def info_card(
         </div>
         """,
         unsafe_allow_html=True,
-    )
-
-
-def render_scorecard(facts: dict[str, Any]) -> None:
-    """Decision scorecard — KPI vs target with a red/amber/green status."""
-    st.markdown("### Decision scorecard *(whole dataset)*")
-    items = [
-        ("Late-delivery rate", facts["national_late_rate"],
-         CONFIG.target_late_rate, False, fmt_pct),
-        ("RJ late-delivery rate", facts["rj_late_rate"],
-         CONFIG.target_rj_late_rate, False, fmt_pct),
-        ("Avg review score", facts["national_avg_score"],
-         CONFIG.target_avg_score, True, fmt_float),
-        ("Orders delivered after day 20", facts["over20_share"],
-         CONFIG.target_over20_share, False, fmt_pct),
-    ]
-    cols = st.columns(len(items))
-    for col, (label, value, target, higher_better, fmt) in zip(cols, items):
-        status, text = rag_status(
-            value, target, higher_is_better=higher_better
-        )
-        sign = "≥" if higher_better else "≤"
-        with col:
-            st.metric(
-                label, fmt(value),
-                delta=f"Target {sign} {fmt(target)}", delta_color="off",
-            )
-            st.markdown(
-                f'<span class="rag rag-{status}">{text}</span>',
-                unsafe_allow_html=True,
-            )
-    st.caption(
-        "Targets are **illustrative** — edit `target_*` in `Config` once "
-        "the business agrees real ones. Amber = within "
-        f"{int(CONFIG.scorecard_tolerance * 100)}% of target. "
-        "The scorecard ignores the sidebar filters by design."
     )
 
 
@@ -1175,25 +1199,6 @@ GLOBAL_CSS: Final[str] = """
     font-weight: 700; margin-right: 6px; margin-bottom: 6px;
   }
 
-  .report-body {
-    background: #FFFFFF; border: 1px solid #E5DEF7;
-    border-radius: 12px; padding: 26px 34px; margin-bottom: 20px;
-    box-shadow: 0 3px 14px rgba(109, 63, 181, 0.08);
-    line-height: 1.75; color: #3F3D56;
-  }
-  .report-body table {
-    width: 100%; border-collapse: collapse; margin: 12px 0;
-    font-size: 14px;
-  }
-  .report-body table th {
-    background: #F5F0FF; color: #4C1D95; padding: 10px 12px;
-    text-align: left; border-bottom: 2px solid #EDE7FA;
-  }
-  .report-body table td {
-    padding: 10px 12px; border-bottom: 1px solid #F0EBFA;
-    vertical-align: top;
-  }
-
   .mode-badge {
     display: inline-block; padding: 6px 14px;
     border-radius: 20px; font-size: 12px; font-weight: 800;
@@ -1209,53 +1214,33 @@ GLOBAL_CSS: Final[str] = """
     border: 1px solid #FDE68A;
   }
 
-  .rag {
-    display: inline-block; margin-top: 8px; padding: 3px 12px;
-    border-radius: 14px; font-size: 12px; font-weight: 800;
-    letter-spacing: 0.04em;
+  .scope-pill {
+    display: inline-block; background: #FFFFFF; color: #6D3FB5;
+    border: 1px solid #C4B5FD; border-radius: 16px;
+    padding: 3px 12px; font-size: 12px; font-weight: 700;
+    margin-bottom: 6px;
   }
-  .rag-green { background: #DCFCE7; color: #166534; }
-  .rag-amber { background: #FEF3C7; color: #92400E; }
-  .rag-red   { background: #FEE2E2; color: #991B1B; }
-  .rag-grey  { background: #E5E7EB; color: #374151; }
 
-  .headline-story {
+  .headline-block {
     background: linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
     border: 1px solid #E5DEF7; border-left: 5px solid #8B5CF6;
-    border-radius: 12px; padding: 22px 26px; margin: 8px 0 20px 0;
+    border-radius: 12px; padding: 22px 26px; margin: 12px 0 8px 0;
     box-shadow: 0 4px 16px rgba(109, 63, 181, 0.10);
     line-height: 1.75;
   }
-  .headline-story p { margin: 0 0 10px 0; font-size: 16px; color: #3F3D56; }
-  .headline-story p:last-child { margin-bottom: 0; }
-  .headline-story .big {
+  .headline-block p { margin: 0 0 10px 0; font-size: 16px; color: #3F3D56; }
+  .headline-block p:last-child { margin-bottom: 0; }
+  .headline-block .big {
     font-size: 22px; font-weight: 700; color: #3F3D56;
   }
-  .headline-story .star {
+  .headline-block .star {
     color: #D64545; font-size: 26px; font-weight: 800;
   }
-  .headline-story .hl { color: #6D3FB5; font-weight: 700; }
-  .headline-story .takeaway {
+  .headline-block .hl { color: #6D3FB5; font-weight: 700; }
+  .headline-block .takeaway {
     color: #4C1D95; font-style: italic; font-weight: 600;
   }
 </style>
-"""
-
-HEADLINE_HTML: Final[str] = """
-<div class="headline-story">
-  <p class="big">
-    Late deliveries cost you <span class="star">1.73 stars</span>.
-  </p>
-  <p>
-    On-time orders average <span class="hl">4.294</span>;
-    late ones average <span class="hl">2.566</span>.
-  </p>
-  <p class="takeaway">
-    That is the single strongest satisfaction driver in this
-    dataset, and it is the insight your presentation should be
-    built around.
-  </p>
-</div>
 """
 
 
@@ -1293,10 +1278,8 @@ def _apply_global_style() -> None:
 def render_sidebar() -> tuple[str, list[str]]:
     st.sidebar.title("📊 Filters")
     st.sidebar.markdown(
-        "Both filters apply to every filterable KPI card and every "
-        "chart on the **Data Analysis Dashboard**. Set to *All* to "
-        "reproduce the unfiltered reference values. The **Decision "
-        "Dashboard** always uses the whole dataset."
+        "Both filters apply to **every KPI, headline figure and chart**. "
+        "Set both to *All* to reproduce the reference values."
     )
 
     year = st.sidebar.selectbox(
@@ -1333,6 +1316,80 @@ def render_sidebar() -> tuple[str, list[str]]:
     return year, states
 
 
+def render_headline_story(
+    conn: sqlite3.Connection, year: str, state_json: str
+) -> None:
+    """Headline + three supporting facts, recomputed for the selection."""
+    h = query_headline(conn, year, state_json)
+
+    gap_txt = "—" if h["gap"] is None else f"{h['gap']:.2f} stars"
+    if h["gap"] is None:
+        takeaway = (
+            "The selection does not contain both on-time and late "
+            "reviewed orders, so the gap cannot be computed. Widen the "
+            "filters to see it."
+        )
+    else:
+        takeaway = (
+            "Late delivery is the strongest satisfaction driver in the "
+            "full dataset, and the insight your presentation should be "
+            "built around."
+        )
+
+    st.markdown(
+        f'<span class="scope-pill">Selection: '
+        f'{scope_label(year, state_json)}</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"""
+        <div class="headline-block">
+          <p class="big">
+            Late deliveries cost you <span class="star">{gap_txt}</span>.
+          </p>
+          <p>
+            On-time orders average
+            <span class="hl">{fmt_float(h['on_time_avg'], 3)}</span>;
+            late ones average
+            <span class="hl">{fmt_float(h['late_avg'], 3)}</span>.
+          </p>
+          <p class="takeaway">{takeaway}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    fact_cols = st.columns(3)
+    fact_cols[0].metric(
+        "Late deliveries",
+        fmt_int(h["late_orders"]),
+        delta=f"{fmt_pct(h['late_share'])} of delivered orders",
+        delta_color="inverse",
+    )
+    worst = h["worst_days_late"]
+    fact_cols[1].metric(
+        "Avg days past estimate (when late)",
+        f"{fmt_float(h['avg_days_late'])} d",
+        delta=f"worst case {fmt_int(worst)} d" if worst is not None else None,
+        delta_color="inverse",
+    )
+    fan_out = int(h["review_rows"]) - int(h["distinct_orders"])
+    fact_cols[2].metric(
+        "Reviews fan-out",
+        f"{fmt_int(h['review_rows'])} rows",
+        delta=f"{fmt_int(h['distinct_orders'])} distinct orders",
+        delta_color="off",
+    )
+    st.caption(
+        "Reviews are a fan-out table — use `COUNT(DISTINCT order_id)` "
+        f"across any join, or order counts will be wrong by {fan_out:,} "
+        "rows in this selection. **Q9 (delivery-time buckets)** shows "
+        "the score decline more smoothly than the binary on-time/late "
+        "split: use both — the split for the headline, the buckets for "
+        "the nuance."
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # 📊 DATA ANALYSIS DASHBOARD  — Tabs 1–3
 # ════════════════════════════════════════════════════════════════════════════
@@ -1341,15 +1398,15 @@ def render_overview_tab(
     conn: sqlite3.Connection, year: str, state_json: str,
     filter_active: bool,
 ) -> None:
-    """Overview — KPI row + review-score distribution (unfiltered)."""
+    """Overview — KPI row + review-score distribution."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Overview")
     st.markdown(
-        "Five headline KPIs plus the review-score distribution — the "
-        "structural fact every other chart builds on."
+        "Five headline KPIs plus the review-score distribution — both "
+        "respond to the **Year** and **State** filters."
     )
 
     k = query_kpis(conn, year, state_json)
@@ -1379,67 +1436,28 @@ def render_overview_tab(
 
     if filter_active:
         st.info(
-            f"Active filter — **Year:** {year}. "
-            "Toggle to All to reproduce the sidebar reference values."
+            f"Active filter — **{scope_label(year, state_json)}**. "
+            "Set both filters to All to reproduce the sidebar reference "
+            "values."
         )
 
     st.divider()
-    chart_review_distribution(conn)
+    chart_review_distribution(conn, year, state_json)
 
 
 def render_theme_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Customer Satisfaction — all filterable charts, each exactly once."""
+    """Customer Satisfaction — every chart filtered, each exactly once."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Customer Satisfaction")
     st.markdown(
-        "Charts respond to the **Year** and **State** filters. Each "
-        "chart appears exactly once across the whole dashboard."
-    )
-
-    st.divider()
-    st.markdown(HEADLINE_HTML, unsafe_allow_html=True)
-
-    facts = query_decision_facts(conn)
-
-    st.markdown("#### Three supporting facts")
-    fact_cols = st.columns(3)
-    late_orders = facts["late_orders"]
-    delivered   = facts["delivered_with_date"]
-    late_share  = (late_orders / delivered) if late_orders and delivered else None
-    fact_cols[0].metric(
-        "Late deliveries",
-        fmt_int(late_orders),
-        delta=f"{fmt_pct(late_share)} of delivered orders",
-        delta_color="inverse",
-    )
-    worst = facts["worst_days_late"]
-    fact_cols[1].metric(
-        "Avg days past estimate (when late)",
-        f"{fmt_float(facts['avg_days_late'])} d",
-        delta=f"worst case {fmt_int(worst)} d" if worst is not None else None,
-        delta_color="inverse",
-    )
-    fact_cols[2].metric(
-        "Reviews fan-out",
-        "99,224 rows",
-        delta="98,673 distinct orders",
-        delta_color="off",
-    )
-    st.caption(
-        "Use `COUNT(DISTINCT order_id)` across any join — plain "
-        "`COUNT(*)` overstates order volume by 551 rows."
-    )
-
-    st.info(
-        "**Split for the headline, buckets for the nuance.** The binary "
-        "on-time/late split is the headline (4.29 vs 2.57). The "
-        "delivery-time buckets below show the score decline more "
-        "smoothly (4.45 → 4.36 → 4.22 → 3.69 → 2.26). Use both."
+        "Every chart responds to the **Year** and **State** filters, and "
+        "every insight line is recomputed from the selection. Each chart "
+        "appears exactly once across the whole dashboard."
     )
 
     st.divider()
@@ -1464,19 +1482,20 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
     )
     st.markdown("## Detail & Method")
     st.markdown(
-        "The data-limitation note required by the brief, plus the "
-        "whole-dataset diagnostics behind the reference numbers."
+        "The data-limitation note required by the brief, plus "
+        "**whole-dataset** diagnostics behind the reference numbers. "
+        "These tables are data-quality checks, not charts, so they "
+        "deliberately ignore the filters."
     )
 
     st.markdown("### Data limitations")
 
     info_card(
         "L1 — Association, not causation",
-        """<p>The <b>1.73-star</b> difference between on-time and late
-        deliveries is a strong <i>association</i>, not proof that
-        lateness alone causes lower ratings. Product quality, seller
-        performance, distance and communication failures all
-        contribute.</p>
+        """<p>The on-time vs late star gap is a strong <i>association</i>,
+        not proof that lateness alone causes lower ratings. Product
+        quality, seller performance, distance and communication failures
+        all contribute.</p>
         <p>Before claiming a specific intervention will increase
         ratings by a precise amount, use a controlled pilot or a
         regression that controls for confounders.</p>""",
@@ -1526,6 +1545,15 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
         on external availability.</p>""",
         variant="info", tags=["External validity", "Map proxy"],
     )
+    info_card(
+        "L7 — Small selections are noisy",
+        """<p>Because every chart is filtered, narrow selections (one
+        state in one year, for example) can contain only a few hundred
+        reviews. Averages from small samples swing widely — read the
+        <code>n=</code> labels on the charts before drawing
+        conclusions.</p>""",
+        variant="info", tags=["Sample size", "Filters"],
+    )
 
     st.divider()
     st.markdown("### Whole-dataset diagnostics")
@@ -1568,7 +1596,7 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
             st.dataframe(customers_qa, hide_index=True,
                          use_container_width=True)
 
-    st.markdown("**Days late when late**")
+    st.markdown("**Days late when late (whole dataset)**")
     if not days_late.empty:
         st.dataframe(days_late, hide_index=True, use_container_width=True)
         avg_late = safe_scalar(days_late, "avg_days_late")
@@ -1581,43 +1609,32 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 🎯 DECISION DASHBOARD  — Tabs 4–6
+# 🎯 DECISION DASHBOARD  — Tab 4
 # ════════════════════════════════════════════════════════════════════════════
 
-def render_recommendations_tab(facts: dict[str, Any]) -> None:
-    """Recommendations — scorecard + headline + facts + prioritised actions."""
+def render_recommendations_tab() -> None:
+    """Recommendations — supporting facts recap + prioritised actions."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Recommendations")
     st.markdown(
-        "Where we stand against target, the headline finding, the "
-        "supporting facts, and the prioritised recommendations that "
-        "follow from them. Figures on this tab are computed live from "
-        "the whole dataset."
+        "The prioritised recommendations that follow from the headline "
+        "finding. They are based on the **whole dataset**, so they do "
+        "not change when the sidebar filters move — a decision should "
+        "not flip because someone narrowed the view."
     )
 
-    render_scorecard(facts)
-
-    st.divider()
-    st.markdown("### Headline")
-    st.markdown(HEADLINE_HTML, unsafe_allow_html=True)
-
-    late_orders = facts["late_orders"]
-    delivered   = facts["delivered_with_date"]
-    late_share  = (late_orders / delivered) if late_orders and delivered else None
-
-    st.markdown("### Three supporting facts")
+    st.markdown("### Three supporting facts (recap, whole dataset)")
     st.markdown(
-        f"""
+        """
         <div class="info-card">
           <ol style="margin-bottom:0; color:#3F3D56; line-height:1.9;">
-            <li><b>{fmt_int(late_orders)} delivered orders
-                ({fmt_pct(late_share)})</b> arrived after their
+            <li><b>7,826 delivered orders (8.1%)</b> arrived after their
                 estimated delivery date.</li>
-            <li>When late, orders average <b>{fmt_float(facts['avg_days_late'])}
-                days past the estimate</b>.</li>
+            <li>When late, orders average <b>9.55 days past the
+                estimate</b>.</li>
             <li>Reviews are a fan-out table — <b>99,224 rows for
                 98,673 orders</b>. Use <code>COUNT(DISTINCT order_id)</code>
                 or your order counts will be wrong.</li>
@@ -1628,31 +1645,20 @@ def render_recommendations_tab(facts: dict[str, Any]) -> None:
     )
 
     st.info(
-        "**Q9 (delivery-time buckets) shows the score decline more "
-        "smoothly than the binary on-time/late split.** Use both — the "
-        "split for the headline, the buckets for the nuance."
+        "**Split for the headline, buckets for the nuance.** The binary "
+        "on-time/late split (4.294 vs 2.566) is the headline. The "
+        "delivery-time buckets (4.45 → 4.36 → 4.22 → 3.69 → 2.26) show "
+        "the decline more smoothly. Use both."
     )
 
     st.divider()
     st.markdown("### Prioritised recommendations")
 
-    rj_rate, nat_rate = facts["rj_late_rate"], facts["national_late_rate"]
-    ratio = (
-        f"{rj_rate / nat_rate:.1f}×" if rj_rate and nat_rate else "—"
-    )
-    rj_gap = (
-        f"{facts['national_avg_score'] - facts['rj_avg_score']:.2f}"
-        if facts["rj_avg_score"] is not None
-        and facts["national_avg_score"] is not None else "—"
-    )
-
     info_card(
         "🔴 R1 — Investigate RJ delivery failures (highest ROI)",
-        f"""<p><b>Evidence.</b> RJ carries {fmt_int(facts['rj_delivered'])}
-        delivered orders at a {fmt_pct(rj_rate)} late rate — {ratio}
-        the {fmt_pct(nat_rate)} national rate. RJ's average score
-        ({fmt_float(facts['rj_avg_score'])}) sits {rj_gap} stars below
-        the national average ({fmt_float(facts['national_avg_score'])}).</p>
+        """<p><b>Evidence.</b> RJ carries 12,687 orders at a 13.5% late
+        rate — 2.3× the 5.9% national average. RJ's average score
+        (3.88) sits 0.29 stars below PR (4.18).</p>
         <p><b>Action.</b> Audit RJ carriers, warehouse locations,
         last-mile routes and hand-off delays. Run a controlled pilot
         before scaling.</p>
@@ -1663,11 +1669,9 @@ def render_recommendations_tab(facts: dict[str, Any]) -> None:
     )
     info_card(
         "🔴 R2 — Trigger intervention before day 20",
-        f"""<p><b>Evidence.</b> Delivery buckets decline 4.45 → 4.36 →
+        """<p><b>Evidence.</b> Delivery buckets decline 4.45 → 4.36 →
         4.22 → 3.69 → 2.26. The largest single step (−0.53 stars) is
-        between 11–20 days and 21–30 days. Today
-        {fmt_pct(facts['over20_share'])} of delivered orders take
-        longer than 20 days.</p>
+        between 11–20 days and 21–30 days.</p>
         <p><b>Action.</b> Ageing-order alerts; escalate at-risk
         parcels; revised ETAs.</p>
         <p><b>Lead.</b> Logistics / Operations + Customer Experience.</p>
@@ -1677,9 +1681,8 @@ def render_recommendations_tab(facts: dict[str, Any]) -> None:
     )
     info_card(
         "🟡 R3 — Recalibrate estimated delivery dates",
-        f"""<p><b>Evidence.</b> Late orders run
-        {fmt_float(facts['avg_days_late'])} days past estimate on
-        average — systematic optimism, not random slippage.</p>
+        """<p><b>Evidence.</b> Late orders run 9.55 days past estimate
+        on average — systematic optimism, not random slippage.</p>
         <p><b>Action.</b> Fit ETA from realised transit history by
         carrier and destination state; back-test predicted vs actual.</p>
         <p><b>Lead.</b> Data Science / Analytics + Logistics.</p>
@@ -1687,17 +1690,10 @@ def render_recommendations_tab(facts: dict[str, Any]) -> None:
         date.</p>""",
         variant="info", tags=["Medium", "Forecasting"],
     )
-
-    lowest_note = (
-        " — the lowest of any state with "
-        f"{CONFIG.big_state_min_orders:,}+ orders"
-        if facts["ba_is_lowest"] else ""
-    )
     info_card(
         "🟡 R4 — Pilot improvement in Bahia (BA)",
-        f"""<p><b>Evidence.</b> BA scores
-        {fmt_float(facts['ba_avg_score'])}{lowest_note}, across
-        ~{fmt_int(facts['ba_orders'])} orders.</p>
+        """<p><b>Evidence.</b> BA scores 3.86 — the lowest of any state
+        with 2,000+ orders — across ~3,340 orders.</p>
         <p><b>Action.</b> Apply the RJ diagnostic checklist to BA; test
         changes at limited scale.</p>
         <p><b>Lead.</b> Regional Operations + Logistics + CX.</p>
@@ -1714,269 +1710,6 @@ def render_recommendations_tab(facts: dict[str, Any]) -> None:
         <p><b>Measures.</b> On-time delivery; ETA accuracy; contacts
         about delivery; review score.</p>""",
         variant="ok", tags=["Strategic", "Brand"],
-    )
-
-
-def render_priorities_tab(facts: dict[str, Any]) -> None:
-    """Priorities & Ownership — department matrix + 90-day sequence."""
-    st.markdown(
-        '<span class="mode-badge mode-decision">🎯 Decision</span>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("## Priorities & Ownership")
-    st.markdown(
-        "Who owns which issue, which recommendation resolves it, and "
-        "which chart they can open to watch the metric move."
-    )
-
-    st.markdown("### Department ownership matrix")
-    st.markdown(
-        f"""
-        <div class="report-body">
-        <table>
-          <thead>
-            <tr>
-              <th>Department</th>
-              <th>Owns</th>
-              <th>Rec.</th>
-              <th>Chart to monitor</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td><b>Logistics / Operations</b></td>
-              <td>RJ late rate ({fmt_pct(facts['rj_late_rate'])});
-                  nationwide 20-day tail</td>
-              <td>R1, R2</td>
-              <td>On-Time vs Late by State · Delivery Buckets</td>
-            </tr>
-            <tr>
-              <td><b>Logistics + CX</b></td>
-              <td>Proactive SLA on orders nearing day 20</td>
-              <td>R2</td>
-              <td>Punctuality vs Satisfaction · Delivery Buckets</td>
-            </tr>
-            <tr>
-              <td><b>Data Science + Logistics</b></td>
-              <td>EDD model recalibration</td>
-              <td>R3</td>
-              <td>Monthly Avg Review Score · Days-Late Diagnostic</td>
-            </tr>
-            <tr>
-              <td><b>Regional Operations</b></td>
-              <td>BA ({fmt_float(facts['ba_avg_score'])}) satisfaction</td>
-              <td>R4</td>
-              <td>Avg Score by State · Brazil Map</td>
-            </tr>
-            <tr>
-              <td><b>CX Analytics</b></td>
-              <td>1★/2★ review-text themes</td>
-              <td>(future)</td>
-              <td>Review Score Distribution</td>
-            </tr>
-            <tr>
-              <td><b>Data Engineering</b></td>
-              <td>Identity resolution (customer_unique_id)</td>
-              <td>(foundation)</td>
-              <td>Backend; feeds every tab</td>
-            </tr>
-            <tr>
-              <td><b>Marketing + Logistics</b></td>
-              <td>Delivery-certainty positioning</td>
-              <td>R5</td>
-              <td>Punctuality vs Satisfaction · Review Distribution</td>
-            </tr>
-            <tr>
-              <td><b>Executive / Steering</b></td>
-              <td>Cross-departmental coordination</td>
-              <td>All</td>
-              <td>Overview KPI row · Decision scorecard</td>
-            </tr>
-          </tbody>
-        </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("### Governance & accountability")
-    st.markdown(
-        """
-        - **Executive sponsor:** Head of Operations — resolves
-          cross-functional blockers, reviews monthly results.
-        - **Operational owner:** Logistics / Operations — accountable
-          for the delivery improvement plan and regional pilots.
-        - **Customer outcome owner:** Customer Experience — proactive
-          updates, complaint categorisation, service recovery.
-        - **Analytical support:** Data Science / Analytics — reliable
-          metrics, ETA evaluation, review-text analysis.
-        - **Data controls:** Data Engineering / Data Governance —
-          identity keys, data definitions, join-quality checks.
-        - **Commercial alignment:** Marketing — customer-facing promises
-          match delivery capability.
-        """
-    )
-
-    st.markdown("### 90-day delivery sequence")
-    phase_cols = st.columns(3)
-    with phase_cols[0]:
-        st.markdown("**Days 1–30 · Diagnose**")
-        st.markdown(
-            "- Validate dashboard metrics against the reference.\n"
-            "- Build an RJ root-cause view (carrier × route × city).\n"
-            "- Define baseline KPIs and alert thresholds."
-        )
-    with phase_cols[1]:
-        st.markdown("**Days 31–60 · Pilot**")
-        st.markdown(
-            "- Ageing-order alerts in RJ.\n"
-            "- Revised ETAs on orders past day 20.\n"
-            "- Investigate BA and low-score review comments."
-        )
-    with phase_cols[2]:
-        st.markdown("**Days 61–90 · Scale or stop**")
-        st.markdown(
-            "- Compare with baseline; quantify the gap closed.\n"
-            "- Refine ETA model; decide what scales.\n"
-            "- Report back to steering."
-        )
-
-
-def render_decision_record_tab(
-    year: str, states: list[str], kpis: dict[str, Any],
-    facts: dict[str, Any],
-) -> None:
-    """Decision Record — the formal decision this dashboard supports."""
-    st.markdown(
-        '<span class="mode-badge mode-decision">🎯 Decision</span>',
-        unsafe_allow_html=True,
-    )
-    st.markdown("## Decision Record")
-    st.markdown(
-        "The formal decision this dashboard supports, the evidence chain "
-        "behind it, the assumptions the reviewer must acknowledge, and "
-        "the review cadence."
-    )
-
-    st.markdown("### Context")
-    st.markdown(
-        f"""
-        **Active filter:** Year = `{year}` ·
-        States = `{', '.join(states)}`
-
-        **KPIs for the active filter:** Total Orders
-        **{fmt_int(kpis['total_orders'])}** · Delivered
-        **{fmt_int(kpis['delivered_orders'])}** · Avg Review
-        **{fmt_float(kpis['avg_review_score'])}** · Late
-        **{fmt_int(kpis['late_deliveries'])}** · Avg Delivery Days
-        **{fmt_float(kpis['avg_delivery_days'])}**
-        """
-    )
-
-    st.markdown("### Decision requested")
-    st.markdown(
-        """
-        Approve a **90-day evidence-led delivery reliability initiative**,
-        starting with an RJ diagnostic and a day-20 escalation process.
-        """
-    )
-
-    st.markdown("### Decision details")
-    st.markdown(
-        f"""
-        <div class="report-body">
-        <table>
-          <tbody>
-            <tr><td><b>Decision</b></td>
-                <td>Approve 90-day delivery-reliability initiative</td></tr>
-            <tr><td><b>Sponsor</b></td>
-                <td>Head of Operations</td></tr>
-            <tr><td><b>Accountable lead</b></td>
-                <td>Logistics / Operations</td></tr>
-            <tr><td><b>Supporting teams</b></td>
-                <td>Customer Experience · Data Science · Data Engineering
-                    · Regional Management · Marketing</td></tr>
-            <tr><td><b>Pilot market</b></td>
-                <td>BA ({fmt_float(facts['ba_avg_score'])},
-                    ~{fmt_int(facts['ba_orders'])} orders) alongside the
-                    RJ diagnostic</td></tr>
-            <tr><td><b>Primary success metric</b></td>
-                <td>Late-delivery rate (whole dataset: currently
-                    {fmt_pct(facts['national_late_rate'])}; illustrative
-                    target ≤ {fmt_pct(CONFIG.target_late_rate)})</td></tr>
-            <tr><td><b>Secondary metrics</b></td>
-                <td>On-time delivery; avg review score; % orders &gt; 20
-                    days; ETA error</td></tr>
-            <tr><td><b>Review cadence</b></td>
-                <td>Monthly at steering, with a 90-day formal gate</td></tr>
-          </tbody>
-        </table>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    late_orders = facts["late_orders"]
-    delivered   = facts["delivered_with_date"]
-    late_share  = (late_orders / delivered) if late_orders and delivered else None
-
-    st.markdown("### Evidence chain")
-    st.markdown(
-        f"""
-        1. **Headline:** On-time orders average 4.294 ★, late orders
-           average 2.566 ★ — a **1.73-star gap**.
-        2. **Breadth:** {fmt_int(late_orders)} orders
-           ({fmt_pct(late_share)} of delivered) arrive late, so the
-           effect touches a minority of customers but is large enough
-           to move the national average.
-        3. **Geography:** RJ accounts for the worst excess —
-           {fmt_pct(facts['rj_late_rate'])} late vs
-           {fmt_pct(facts['national_late_rate'])} nationally, across
-           {fmt_int(facts['rj_delivered'])} delivered orders.
-        4. **Threshold:** Satisfaction drops below the 4.09 national
-           average at every delivery bucket beyond 20 days.
-        5. **Severity:** When late, orders average
-           {fmt_float(facts['avg_days_late'])} days past estimate, worst
-           case {fmt_int(facts['worst_days_late'])} days.
-        """
-    )
-
-    st.markdown("### Assumptions and caveats")
-    st.markdown(
-        """
-        - The 1.73-star gap is an **association, not proof of
-          causation**. Product quality, seller behaviour, distance and
-          communication all contribute.
-        - 2016 and 2018 are **partial years**; comparisons across
-          periods should account for this.
-        - Reviews are **voluntary**; scores reflect reviewers, not the
-          full customer base.
-        - The dashboard does **not** include a delivery-distance
-          feature; the RJ diagnosis should add one before scaling.
-        - Scorecard targets are **illustrative** until agreed with the
-          business.
-        - Score improvements should be measured against a **validated
-          baseline**, not against projections.
-        """
-    )
-
-    st.markdown("### Next review")
-    st.markdown(
-        """
-        - **+30 days:** Baseline KPI validation complete; RJ root-cause
-          view in place.
-        - **+60 days:** Pilot live in RJ; day-20 alert threshold tuned.
-        - **+90 days:** Formal decision gate — scale, reshape, or stop.
-        """
-    )
-
-    st.divider()
-    st.caption(
-        "**Sign-off block:** This decision record is based on the "
-        "verified KPIs and charts reproduced in the Data Analysis "
-        "Dashboard tabs with filters = All. Any deviation from the "
-        "reference numbers in the sidebar should be investigated before "
-        "signature."
     )
 
 
@@ -2003,6 +1736,7 @@ def main() -> None:
     state_json    = safe_state_json(states)
     filter_active = year != "All" or "All" not in states
 
+    # ── Title + headline (headline visible on every tab) ──────────────
     st.markdown(
         """
         <h1 style="
@@ -2017,30 +1751,22 @@ def main() -> None:
                   text-align:center;'>
           PORA Academy Cohort 7 — Group 1 Capstone Project
         </p>
-        <p style='color:#9CA3AF; font-size:13px; margin-top:2px;
-                  text-align:center;'>
-          📊 Data Analysis Dashboard · 🎯 Decision Dashboard
-        </p>
         """,
         unsafe_allow_html=True,
     )
+    render_headline_story(conn, year, state_json)
 
-    facts = query_decision_facts(conn)
-
+    # ── Four tabs ─────────────────────────────────────────────────────
     (
         tab_overview,
         tab_theme,
         tab_detail,
         tab_recommendations,
-        tab_priorities,
-        tab_decision,
     ) = st.tabs([
         "📊 Overview",
         "📊 Customer Satisfaction",
         "📊 Detail & Method",
         "🎯 Recommendations",
-        "🎯 Priorities & Ownership",
-        "🎯 Decision Record",
     ])
 
     with tab_overview:
@@ -2050,20 +1776,15 @@ def main() -> None:
     with tab_detail:
         render_detail_tab(conn)
     with tab_recommendations:
-        render_recommendations_tab(facts)
-    with tab_priorities:
-        render_priorities_tab(facts)
-    with tab_decision:
-        kpis = query_kpis(conn, year, state_json)
-        render_decision_record_tab(year, states, kpis, facts)
+        render_recommendations_tab()
 
     st.divider()
     st.caption(
         "**Reference (filters = All):** Total Orders 99,441 · Delivered "
         "96,478 · Avg Review 4.09 · Late 7,826 · Avg Delivery Days 12.56. "
-        "Review Score Distribution is intentionally unfiltered — a "
-        "whole-dataset fact. Every filterable chart reconciles to the "
-        "verified README tables with filters = All."
+        "Every KPI, headline figure, chart and insight line responds to "
+        "the Year and State filters and reconciles to the verified README "
+        "tables when both are set to All."
     )
 
 
