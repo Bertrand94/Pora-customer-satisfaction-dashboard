@@ -2364,44 +2364,69 @@ def main() -> None:
     )
     render_projection_headline()
 
-    # ── Tabs ──────────────────────────────────────────────────────────
-    (
-        tab_overview, tab_charts, tab_limitations,
-        tab_recommendations, tab_departments, tab_research, tab_report,
-    ) = st.tabs([
-        "🏠 Overview",
-        "📊 Key Charts",
-        "⚠️ Limitations",
-        "✅ Recommendations",
-        "🏢 Departments",
-        "🔬 Future Research",
-        "📄 Summary Report",
+    # ── Four dashboard tabs ────────────────────────────────────────────
+    tab_overview, tab_satisfaction, tab_detail, tab_findings = st.tabs([
+        "Overview",
+        "Customer Satisfaction",
+        "Detail & Method",
+        "Findings & Recommendations",
     ])
 
     with tab_overview:
         render_overview_tab(conn, year, state_json, filter_active)
-    with tab_charts:
-        render_charts_tab(conn, year, state_json)
-    with tab_limitations:
+        st.markdown("### Review-score distribution")
+        chart_review_distribution(conn)
+        st.caption(
+            "The distribution chart describes the whole dataset and is "
+            "intentionally not changed by the sidebar filters."
+        )
+
+    with tab_satisfaction:
+        st.markdown("## Customer Satisfaction Analysis")
+        st.write(
+            "Explore customer review scores alongside delivery performance. "
+            "The Year and State filters in the sidebar are applied wherever "
+            "the underlying query supports those filters."
+        )
+        chart_monthly_score(conn, year, state_json)
+        st.divider()
+        chart_punctuality_vs_satisfaction(conn, year, state_json)
+        st.divider()
+        chart_satisfaction_by_delivery_bucket(conn, year, state_json)
+        st.divider()
+        chart_ontime_by_state(conn, year, state_json)
+        st.divider()
+        chart_brazil_map(conn, year, state_json)
+
+    with tab_detail:
+        st.markdown("## Detail & Method")
+        st.markdown(
+            "This section documents the analysis boundaries, data-quality "
+            "considerations, and the report that explains how to interpret "
+            "the dashboard results."
+        )
         render_limitations_tab()
-    with tab_recommendations:
-        render_recommendations_tab()
-    with tab_departments:
-        render_departments_tab()
-    with tab_research:
-        render_research_tab()
-    with tab_report:
+        st.divider()
         render_report_tab(year, states)
+        with st.expander("Future research and validation work"):
+            render_research_tab()
+
+    with tab_findings:
+        st.markdown("## Findings & Recommendations")
+        render_recommendations_tab()
+        st.divider()
+        render_departments_tab()
 
     # ── Footer ────────────────────────────────────────────────────────
     st.divider()
     st.caption(
         "**Reference (filters = All):** Total Orders 99,441 · Delivered "
         "96,478 · Avg Review 4.09 · Late 7,826 · Avg Delivery Days "
-        "12.56. Both Year and State filters apply to every KPI and every "
-        "chart on the **Overview** and **Key Charts** tabs. Chart 1 "
-        "(Review Score Distribution) is intentionally unfiltered — a "
-        "whole-dataset fact."
+        "12.56. Use the sidebar to filter the Overview and applicable "
+        "Customer Satisfaction charts. Review Score Distribution is "
+        "intentionally unfiltered — a whole-dataset fact. Validate the "
+        "reported reference figures against the source CSVs before "
+        "external publication."
     )
 
 
