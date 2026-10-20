@@ -9,7 +9,8 @@ Two dashboards in one app:
      Overview · Customer Satisfaction · Detail & Method
 
   🎯 DECISION DASHBOARD — what should we do?
-     Recommendations · Priorities & Ownership · Decision Record
+     Recommendations (with live scorecard) · Priorities & Ownership ·
+     Decision Record
 
 Chart map (each chart appears exactly once):
      Review score distribution          → Overview tab (unfiltered)
@@ -34,6 +35,7 @@ Run:
 Environment:
     OLIST_DATA_DIR   folder holding the 4 CSVs (default ./data)
     OLIST_DB_PATH    optional explicit SQLite path
+    OLIST_LOG_LEVEL  logging level (default INFO)
 """
 
 from __future__ import annotations
@@ -105,6 +107,15 @@ class Config:
     reference_late_avg:          Final[float] = 2.57
     reference_star_gap:          Final[float] = 1.73
     reference_avg_days_late:     Final[float] = 9.55
+
+    # Decision-scorecard targets — ILLUSTRATIVE. Replace with targets agreed
+    # with the business before presenting.
+    target_late_rate:      Final[float] = 0.06   # national late-delivery rate
+    target_rj_late_rate:   Final[float] = 0.08   # Rio de Janeiro late rate
+    target_avg_score:      Final[float] = 4.20   # average review score
+    target_over20_share:   Final[float] = 0.04   # share of orders > 20 days
+    scorecard_tolerance:   Final[float] = 0.10   # within 10% of target = amber
+    big_state_min_orders:  Final[int]   = 2_000  # "large state" cut-off
 
     all_states: Final[tuple[str, ...]] = (
         "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA",
@@ -289,20 +300,29 @@ def fmt_float(value: Any, places: int = 2) -> str:
     return "—" if value is None else f"{value:.{places}f}"
 
 
+def fmt_pct(value: Any, places: int = 1) -> str:
+    """Format a fraction (0.081) as a percentage string ('8.1%')."""
+    return "—" if value is None else f"{100 * value:.{places}f}%"
+
+
 # ════════════════════════════════════════════════════════════════════════════
-# §4  KPI COMPUTATION  — Q1
+# §4  KPI COMPUTATION  — Q1  +  LIVE DECISION FACTS
 # ════════════════════════════════════════════════════════════════════════════
 
 def query_kpis(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> dict[str, Any]:
-    """Q1 — headline KPIs. Filters = All reproduces the README table."""
+    """Q1 — headline KPIs. Filters = All reproduces the README table.
+
+    Every KPI (including the average review score) responds to the Year and
+    State filters.
+    """
+    params = year_multi(year, state_json)
+
     df = safe_query(conn, """
         SELECT COUNT(DISTINCT o.order_id) AS total_orders,
                COUNT(DISTINCT CASE WHEN o.order_status = 'delivered'
                                     THEN o.order_id END) AS delivered_orders,
-               (SELECT ROUND(AVG(CAST(review_score AS REAL)), 2)
-                  FROM reviews) AS avg_review_score,
                SUM(CASE WHEN o.order_status = 'delivered'
                          AND o.order_delivered_customer_date
                               > o.order_estimated_delivery_date
@@ -317,15 +337,151 @@ def query_kpis(
         WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
           AND (? = '[]' OR c.customer_state IN
                         (SELECT value FROM json_each(?)))
-    """, params=year_multi(year, state_json), label="KPI row")
+    """, params=params, label="KPI row")
+
+    score_df = safe_query(conn, """
+        SELECT ROUND(AVG(CAST(r.review_score AS REAL)), 2) AS avg_review_score
+        FROM reviews r
+        JOIN orders o    ON r.order_id = o.order_id
+        JOIN customers c ON o.customer_id = c.customer_id
+        WHERE (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
+          AND (? = '[]' OR c.customer_state IN
+                        (SELECT value FROM json_each(?)))
+    """, params=params, label="KPI avg review score")
 
     return {
         "total_orders":      safe_scalar(df, "total_orders", 0),
         "delivered_orders":  safe_scalar(df, "delivered_orders", 0),
-        "avg_review_score":  safe_scalar(df, "avg_review_score"),
+        "avg_review_score":  safe_scalar(score_df, "avg_review_score"),
         "late_deliveries":   safe_scalar(df, "late_deliveries", 0),
         "avg_delivery_days": safe_scalar(df, "avg_delivery_days"),
     }
+
+
+@st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
+def query_decision_facts(_conn: sqlite3.Connection) -> dict[str, Any]:
+    """Whole-dataset (unfiltered) facts that drive the Decision Dashboard.
+
+    The decision dashboard is deliberately NOT filtered: a decision rests on
+    the full picture, and the numbers must not change when someone moves a
+    sidebar filter.
+    """
+    facts: dict[str, Any] = {
+        "delivered_with_date": None, "late_orders": None,
+        "national_late_rate": None,
+        "rj_delivered": None, "rj_late_rate": None, "rj_avg_score": None,
+        "ba_orders": None, "ba_avg_score": None, "ba_is_lowest": False,
+        "national_avg_score": None,
+        "over20_share": None, "avg_days_late": None,
+        "worst_days_late": None,
+    }
+
+    states = safe_query(_conn, """
+        SELECT c.customer_state AS state,
+               COUNT(DISTINCT o.order_id) AS delivered,
+               SUM(CASE WHEN o.order_delivered_customer_date
+                            > o.order_estimated_delivery_date
+                        THEN 1 ELSE 0 END) AS late
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+        WHERE o.order_status = 'delivered'
+          AND o.order_delivered_customer_date IS NOT NULL
+        GROUP BY state
+    """, label="decision: late rate by state")
+
+    if not states.empty:
+        total_delivered = int(states["delivered"].sum())
+        total_late      = int(states["late"].sum())
+        facts["delivered_with_date"] = total_delivered
+        facts["late_orders"]         = total_late
+        if total_delivered:
+            facts["national_late_rate"] = total_late / total_delivered
+        rj = states[states["state"] == "RJ"]
+        if not rj.empty and int(rj.iloc[0]["delivered"]) > 0:
+            facts["rj_delivered"] = int(rj.iloc[0]["delivered"])
+            facts["rj_late_rate"] = (
+                float(rj.iloc[0]["late"]) / facts["rj_delivered"]
+            )
+
+    scores = safe_query(_conn, """
+        SELECT c.customer_state AS state,
+               COUNT(DISTINCT o.order_id) AS orders,
+               AVG(CAST(r.review_score AS REAL)) AS avg_score
+        FROM orders o
+        JOIN customers c ON o.customer_id = c.customer_id
+        JOIN reviews r  ON o.order_id = r.order_id
+        GROUP BY state
+    """, label="decision: score by state")
+
+    if not scores.empty:
+        by_state = scores.set_index("state")
+        if "RJ" in by_state.index:
+            facts["rj_avg_score"] = float(by_state.loc["RJ", "avg_score"])
+        if "BA" in by_state.index:
+            facts["ba_avg_score"] = float(by_state.loc["BA", "avg_score"])
+            facts["ba_orders"]    = int(by_state.loc["BA", "orders"])
+        big = scores[scores["orders"] >= CONFIG.big_state_min_orders]
+        if not big.empty:
+            lowest = big.loc[big["avg_score"].idxmin(), "state"]
+            facts["ba_is_lowest"] = (lowest == "BA")
+
+    overall = safe_query(_conn, """
+        SELECT AVG(CAST(review_score AS REAL)) AS avg_score FROM reviews
+    """, label="decision: overall score")
+    val = safe_scalar(overall, "avg_score")
+    facts["national_avg_score"] = None if val is None else float(val)
+
+    tail = safe_query(_conn, """
+        SELECT COUNT(*) AS n,
+               SUM(CASE WHEN julianday(order_delivered_customer_date)
+                            - julianday(order_purchase_timestamp) > 20
+                        THEN 1 ELSE 0 END) AS over20
+        FROM orders
+        WHERE order_status = 'delivered'
+          AND order_delivered_customer_date IS NOT NULL
+    """, label="decision: day-20 tail")
+    n = safe_scalar(tail, "n", 0)
+    if n:
+        facts["over20_share"] = float(safe_scalar(tail, "over20", 0)) / n
+
+    late = safe_query(_conn, """
+        SELECT ROUND(AVG(julianday(order_delivered_customer_date)
+                       - julianday(order_estimated_delivery_date)), 2)
+                   AS avg_days_late,
+               ROUND(MAX(julianday(order_delivered_customer_date)
+                       - julianday(order_estimated_delivery_date)), 0)
+                   AS worst_days_late
+        FROM orders
+        WHERE order_status = 'delivered'
+          AND order_delivered_customer_date > order_estimated_delivery_date
+    """, label="decision: days late")
+    facts["avg_days_late"]   = safe_scalar(late, "avg_days_late")
+    facts["worst_days_late"] = safe_scalar(late, "worst_days_late")
+
+    return facts
+
+
+def rag_status(
+    value: float | None,
+    target: float,
+    *,
+    higher_is_better: bool,
+    tolerance: float = CONFIG.scorecard_tolerance,
+) -> tuple[str, str]:
+    """Return (css_class, label) — green / amber / red / grey."""
+    if value is None:
+        return "grey", "No data"
+    if higher_is_better:
+        if value >= target:
+            return "green", "On target"
+        if value >= target * (1 - tolerance):
+            return "amber", "Near target"
+        return "red", "Off target"
+    if value <= target:
+        return "green", "On target"
+    if value <= target * (1 + tolerance):
+        return "amber", "Near target"
+    return "red", "Off target"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -534,9 +690,13 @@ def chart_ontime_by_state(
     ax.legend(frameon=False)
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
+
+    facts = query_decision_facts(conn)
     st.caption(
-        "**Insight.** RJ's late rate is 13.5% — 2.3× the 5.9% national "
-        "average. SP has the highest volume at a healthy 5.9%."
+        f"**Insight.** Whole-dataset late rate: RJ "
+        f"**{fmt_pct(facts['rj_late_rate'])}** vs "
+        f"**{fmt_pct(facts['national_late_rate'])}** nationally. "
+        "The bars above respond to the filters; these two rates do not."
     )
 
 
@@ -782,7 +942,7 @@ def chart_brazil_map(
                        if r["orders"] > 0 else r["state"]),
             axis=1,
         )
-    )
+    ) if not label_df.empty else label_df
 
     try:
         geojson = load_brazil_geojson()
@@ -892,6 +1052,42 @@ def info_card(
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def render_scorecard(facts: dict[str, Any]) -> None:
+    """Decision scorecard — KPI vs target with a red/amber/green status."""
+    st.markdown("### Decision scorecard *(whole dataset)*")
+    items = [
+        ("Late-delivery rate", facts["national_late_rate"],
+         CONFIG.target_late_rate, False, fmt_pct),
+        ("RJ late-delivery rate", facts["rj_late_rate"],
+         CONFIG.target_rj_late_rate, False, fmt_pct),
+        ("Avg review score", facts["national_avg_score"],
+         CONFIG.target_avg_score, True, fmt_float),
+        ("Orders delivered after day 20", facts["over20_share"],
+         CONFIG.target_over20_share, False, fmt_pct),
+    ]
+    cols = st.columns(len(items))
+    for col, (label, value, target, higher_better, fmt) in zip(cols, items):
+        status, text = rag_status(
+            value, target, higher_is_better=higher_better
+        )
+        sign = "≥" if higher_better else "≤"
+        with col:
+            st.metric(
+                label, fmt(value),
+                delta=f"Target {sign} {fmt(target)}", delta_color="off",
+            )
+            st.markdown(
+                f'<span class="rag rag-{status}">{text}</span>',
+                unsafe_allow_html=True,
+            )
+    st.caption(
+        "Targets are **illustrative** — edit `target_*` in `Config` once "
+        "the business agrees real ones. Amber = within "
+        f"{int(CONFIG.scorecard_tolerance * 100)}% of target. "
+        "The scorecard ignores the sidebar filters by design."
     )
 
 
@@ -1013,6 +1209,16 @@ GLOBAL_CSS: Final[str] = """
     border: 1px solid #FDE68A;
   }
 
+  .rag {
+    display: inline-block; margin-top: 8px; padding: 3px 12px;
+    border-radius: 14px; font-size: 12px; font-weight: 800;
+    letter-spacing: 0.04em;
+  }
+  .rag-green { background: #DCFCE7; color: #166534; }
+  .rag-amber { background: #FEF3C7; color: #92400E; }
+  .rag-red   { background: #FEE2E2; color: #991B1B; }
+  .rag-grey  { background: #E5E7EB; color: #374151; }
+
   .headline-story {
     background: linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
     border: 1px solid #E5DEF7; border-left: 5px solid #8B5CF6;
@@ -1033,6 +1239,23 @@ GLOBAL_CSS: Final[str] = """
     color: #4C1D95; font-style: italic; font-weight: 600;
   }
 </style>
+"""
+
+HEADLINE_HTML: Final[str] = """
+<div class="headline-story">
+  <p class="big">
+    Late deliveries cost you <span class="star">1.73 stars</span>.
+  </p>
+  <p>
+    On-time orders average <span class="hl">4.294</span>;
+    late ones average <span class="hl">2.566</span>.
+  </p>
+  <p class="takeaway">
+    That is the single strongest satisfaction driver in this
+    dataset, and it is the insight your presentation should be
+    built around.
+  </p>
+</div>
 """
 
 
@@ -1072,7 +1295,8 @@ def render_sidebar() -> tuple[str, list[str]]:
     st.sidebar.markdown(
         "Both filters apply to every filterable KPI card and every "
         "chart on the **Data Analysis Dashboard**. Set to *All* to "
-        "reproduce the unfiltered reference values."
+        "reproduce the unfiltered reference values. The **Decision "
+        "Dashboard** always uses the whole dataset."
     )
 
     year = st.sidebar.selectbox(
@@ -1178,38 +1402,26 @@ def render_theme_tab(
     )
 
     st.divider()
-    st.markdown(
-        """
-        <div class="headline-story">
-          <p class="big">
-            Late deliveries cost you <span class="star">1.73 stars</span>.
-          </p>
-          <p>
-            On-time orders average <span class="hl">4.294</span>;
-            late ones average <span class="hl">2.566</span>.
-          </p>
-          <p class="takeaway">
-            That is the single strongest satisfaction driver in this
-            dataset, and it is the insight your presentation should be
-            built around.
-          </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(HEADLINE_HTML, unsafe_allow_html=True)
+
+    facts = query_decision_facts(conn)
 
     st.markdown("#### Three supporting facts")
     fact_cols = st.columns(3)
+    late_orders = facts["late_orders"]
+    delivered   = facts["delivered_with_date"]
+    late_share  = (late_orders / delivered) if late_orders and delivered else None
     fact_cols[0].metric(
         "Late deliveries",
-        "7,826",
-        delta="8.1% of delivered orders",
+        fmt_int(late_orders),
+        delta=f"{fmt_pct(late_share)} of delivered orders",
         delta_color="inverse",
     )
+    worst = facts["worst_days_late"]
     fact_cols[1].metric(
         "Avg days past estimate (when late)",
-        "9.55 d",
-        delta="worst case 189 d",
+        f"{fmt_float(facts['avg_days_late'])} d",
+        delta=f"worst case {fmt_int(worst)} d" if worst is not None else None,
         delta_color="inverse",
     )
     fact_cols[2].metric(
@@ -1359,9 +1571,12 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
     st.markdown("**Days late when late**")
     if not days_late.empty:
         st.dataframe(days_late, hide_index=True, use_container_width=True)
+        avg_late = safe_scalar(days_late, "avg_days_late")
+        worst    = safe_scalar(days_late, "worst_days_late")
         st.caption(
-            "When late, orders run **9.55 days past estimate** on "
-            "average; the worst case is **189 days**."
+            f"When late, orders run **{fmt_float(avg_late)} days past "
+            f"estimate** on average; the worst case is "
+            f"**{fmt_int(worst)} days**."
         )
 
 
@@ -1369,48 +1584,40 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
 # 🎯 DECISION DASHBOARD  — Tabs 4–6
 # ════════════════════════════════════════════════════════════════════════════
 
-def render_recommendations_tab() -> None:
-    """Recommendations — headline + supporting facts + prioritised actions."""
+def render_recommendations_tab(facts: dict[str, Any]) -> None:
+    """Recommendations — scorecard + headline + facts + prioritised actions."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Recommendations")
     st.markdown(
-        "The headline finding, the three supporting facts, and the "
-        "prioritised recommendations that follow from them."
+        "Where we stand against target, the headline finding, the "
+        "supporting facts, and the prioritised recommendations that "
+        "follow from them. Figures on this tab are computed live from "
+        "the whole dataset."
     )
 
+    render_scorecard(facts)
+
+    st.divider()
     st.markdown("### Headline")
-    st.markdown(
-        """
-        <div class="headline-story">
-          <p class="big">
-            Late deliveries cost you <span class="star">1.73 stars</span>.
-          </p>
-          <p>
-            On-time orders average <span class="hl">4.294</span>;
-            late ones average <span class="hl">2.566</span>.
-          </p>
-          <p class="takeaway">
-            That is the single strongest satisfaction driver in this
-            dataset, and it is the insight your presentation should be
-            built around.
-          </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(HEADLINE_HTML, unsafe_allow_html=True)
+
+    late_orders = facts["late_orders"]
+    delivered   = facts["delivered_with_date"]
+    late_share  = (late_orders / delivered) if late_orders and delivered else None
 
     st.markdown("### Three supporting facts")
     st.markdown(
-        """
+        f"""
         <div class="info-card">
           <ol style="margin-bottom:0; color:#3F3D56; line-height:1.9;">
-            <li><b>7,826 delivered orders (8.1%)</b> arrived after their
+            <li><b>{fmt_int(late_orders)} delivered orders
+                ({fmt_pct(late_share)})</b> arrived after their
                 estimated delivery date.</li>
-            <li>When late, orders average <b>9.55 days past the
-                estimate</b>.</li>
+            <li>When late, orders average <b>{fmt_float(facts['avg_days_late'])}
+                days past the estimate</b>.</li>
             <li>Reviews are a fan-out table — <b>99,224 rows for
                 98,673 orders</b>. Use <code>COUNT(DISTINCT order_id)</code>
                 or your order counts will be wrong.</li>
@@ -1429,11 +1636,23 @@ def render_recommendations_tab() -> None:
     st.divider()
     st.markdown("### Prioritised recommendations")
 
+    rj_rate, nat_rate = facts["rj_late_rate"], facts["national_late_rate"]
+    ratio = (
+        f"{rj_rate / nat_rate:.1f}×" if rj_rate and nat_rate else "—"
+    )
+    rj_gap = (
+        f"{facts['national_avg_score'] - facts['rj_avg_score']:.2f}"
+        if facts["rj_avg_score"] is not None
+        and facts["national_avg_score"] is not None else "—"
+    )
+
     info_card(
         "🔴 R1 — Investigate RJ delivery failures (highest ROI)",
-        """<p><b>Evidence.</b> RJ carries 12,687 orders at a 13.5% late
-        rate — 2.3× the 5.9% national average. RJ's average score
-        (3.88) sits 0.29 stars below PR (4.18).</p>
+        f"""<p><b>Evidence.</b> RJ carries {fmt_int(facts['rj_delivered'])}
+        delivered orders at a {fmt_pct(rj_rate)} late rate — {ratio}
+        the {fmt_pct(nat_rate)} national rate. RJ's average score
+        ({fmt_float(facts['rj_avg_score'])}) sits {rj_gap} stars below
+        the national average ({fmt_float(facts['national_avg_score'])}).</p>
         <p><b>Action.</b> Audit RJ carriers, warehouse locations,
         last-mile routes and hand-off delays. Run a controlled pilot
         before scaling.</p>
@@ -1444,9 +1663,11 @@ def render_recommendations_tab() -> None:
     )
     info_card(
         "🔴 R2 — Trigger intervention before day 20",
-        """<p><b>Evidence.</b> Delivery buckets decline 4.45 → 4.36 →
+        f"""<p><b>Evidence.</b> Delivery buckets decline 4.45 → 4.36 →
         4.22 → 3.69 → 2.26. The largest single step (−0.53 stars) is
-        between 11–20 days and 21–30 days.</p>
+        between 11–20 days and 21–30 days. Today
+        {fmt_pct(facts['over20_share'])} of delivered orders take
+        longer than 20 days.</p>
         <p><b>Action.</b> Ageing-order alerts; escalate at-risk
         parcels; revised ETAs.</p>
         <p><b>Lead.</b> Logistics / Operations + Customer Experience.</p>
@@ -1456,8 +1677,9 @@ def render_recommendations_tab() -> None:
     )
     info_card(
         "🟡 R3 — Recalibrate estimated delivery dates",
-        """<p><b>Evidence.</b> Late orders run 9.55 days past estimate
-        on average — systematic optimism, not random slippage.</p>
+        f"""<p><b>Evidence.</b> Late orders run
+        {fmt_float(facts['avg_days_late'])} days past estimate on
+        average — systematic optimism, not random slippage.</p>
         <p><b>Action.</b> Fit ETA from realised transit history by
         carrier and destination state; back-test predicted vs actual.</p>
         <p><b>Lead.</b> Data Science / Analytics + Logistics.</p>
@@ -1465,10 +1687,17 @@ def render_recommendations_tab() -> None:
         date.</p>""",
         variant="info", tags=["Medium", "Forecasting"],
     )
+
+    lowest_note = (
+        " — the lowest of any state with "
+        f"{CONFIG.big_state_min_orders:,}+ orders"
+        if facts["ba_is_lowest"] else ""
+    )
     info_card(
         "🟡 R4 — Pilot improvement in Bahia (BA)",
-        """<p><b>Evidence.</b> BA scores 3.86 — the lowest of any state
-        with 2,000+ orders — across ~3,340 orders.</p>
+        f"""<p><b>Evidence.</b> BA scores
+        {fmt_float(facts['ba_avg_score'])}{lowest_note}, across
+        ~{fmt_int(facts['ba_orders'])} orders.</p>
         <p><b>Action.</b> Apply the RJ diagnostic checklist to BA; test
         changes at limited scale.</p>
         <p><b>Lead.</b> Regional Operations + Logistics + CX.</p>
@@ -1488,7 +1717,7 @@ def render_recommendations_tab() -> None:
     )
 
 
-def render_priorities_tab() -> None:
+def render_priorities_tab(facts: dict[str, Any]) -> None:
     """Priorities & Ownership — department matrix + 90-day sequence."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
@@ -1502,7 +1731,7 @@ def render_priorities_tab() -> None:
 
     st.markdown("### Department ownership matrix")
     st.markdown(
-        """
+        f"""
         <div class="report-body">
         <table>
           <thead>
@@ -1516,7 +1745,8 @@ def render_priorities_tab() -> None:
           <tbody>
             <tr>
               <td><b>Logistics / Operations</b></td>
-              <td>RJ late rate (13.5%); nationwide 20-day tail</td>
+              <td>RJ late rate ({fmt_pct(facts['rj_late_rate'])});
+                  nationwide 20-day tail</td>
               <td>R1, R2</td>
               <td>On-Time vs Late by State · Delivery Buckets</td>
             </tr>
@@ -1534,7 +1764,7 @@ def render_priorities_tab() -> None:
             </tr>
             <tr>
               <td><b>Regional Operations</b></td>
-              <td>BA (3.86) satisfaction</td>
+              <td>BA ({fmt_float(facts['ba_avg_score'])}) satisfaction</td>
               <td>R4</td>
               <td>Avg Score by State · Brazil Map</td>
             </tr>
@@ -1560,7 +1790,7 @@ def render_priorities_tab() -> None:
               <td><b>Executive / Steering</b></td>
               <td>Cross-departmental coordination</td>
               <td>All</td>
-              <td>Overview KPI row</td>
+              <td>Overview KPI row · Decision scorecard</td>
             </tr>
           </tbody>
         </table>
@@ -1613,7 +1843,8 @@ def render_priorities_tab() -> None:
 
 
 def render_decision_record_tab(
-    year: str, states: list[str], kpis: dict[str, Any]
+    year: str, states: list[str], kpis: dict[str, Any],
+    facts: dict[str, Any],
 ) -> None:
     """Decision Record — the formal decision this dashboard supports."""
     st.markdown(
@@ -1633,7 +1864,7 @@ def render_decision_record_tab(
         **Active filter:** Year = `{year}` ·
         States = `{', '.join(states)}`
 
-        **Reference (filters = All):** Total Orders
+        **KPIs for the active filter:** Total Orders
         **{fmt_int(kpis['total_orders'])}** · Delivered
         **{fmt_int(kpis['delivered_orders'])}** · Avg Review
         **{fmt_float(kpis['avg_review_score'])}** · Late
@@ -1652,7 +1883,7 @@ def render_decision_record_tab(
 
     st.markdown("### Decision details")
     st.markdown(
-        """
+        f"""
         <div class="report-body">
         <table>
           <tbody>
@@ -1666,9 +1897,13 @@ def render_decision_record_tab(
                 <td>Customer Experience · Data Science · Data Engineering
                     · Regional Management · Marketing</td></tr>
             <tr><td><b>Pilot market</b></td>
-                <td>BA (3.86, ~3,340 orders) alongside the RJ diagnostic</td></tr>
+                <td>BA ({fmt_float(facts['ba_avg_score'])},
+                    ~{fmt_int(facts['ba_orders'])} orders) alongside the
+                    RJ diagnostic</td></tr>
             <tr><td><b>Primary success metric</b></td>
-                <td>Late-delivery rate (national: currently 8.1%)</td></tr>
+                <td>Late-delivery rate (whole dataset: currently
+                    {fmt_pct(facts['national_late_rate'])}; illustrative
+                    target ≤ {fmt_pct(CONFIG.target_late_rate)})</td></tr>
             <tr><td><b>Secondary metrics</b></td>
                 <td>On-time delivery; avg review score; % orders &gt; 20
                     days; ETA error</td></tr>
@@ -1681,20 +1916,28 @@ def render_decision_record_tab(
         unsafe_allow_html=True,
     )
 
+    late_orders = facts["late_orders"]
+    delivered   = facts["delivered_with_date"]
+    late_share  = (late_orders / delivered) if late_orders and delivered else None
+
     st.markdown("### Evidence chain")
     st.markdown(
-        """
+        f"""
         1. **Headline:** On-time orders average 4.294 ★, late orders
            average 2.566 ★ — a **1.73-star gap**.
-        2. **Breadth:** 7,826 orders (8.1% of delivered) arrive late,
-           so the effect touches a minority of customers but is large
-           enough to move the national average.
-        3. **Geography:** RJ accounts for the worst excess — 13.5% late
-           vs 5.9% national, across 12,687 orders.
+        2. **Breadth:** {fmt_int(late_orders)} orders
+           ({fmt_pct(late_share)} of delivered) arrive late, so the
+           effect touches a minority of customers but is large enough
+           to move the national average.
+        3. **Geography:** RJ accounts for the worst excess —
+           {fmt_pct(facts['rj_late_rate'])} late vs
+           {fmt_pct(facts['national_late_rate'])} nationally, across
+           {fmt_int(facts['rj_delivered'])} delivered orders.
         4. **Threshold:** Satisfaction drops below the 4.09 national
            average at every delivery bucket beyond 20 days.
-        5. **Severity:** When late, orders average 9.55 days past
-           estimate, worst case 189 days.
+        5. **Severity:** When late, orders average
+           {fmt_float(facts['avg_days_late'])} days past estimate, worst
+           case {fmt_int(facts['worst_days_late'])} days.
         """
     )
 
@@ -1710,6 +1953,8 @@ def render_decision_record_tab(
           full customer base.
         - The dashboard does **not** include a delivery-distance
           feature; the RJ diagnosis should add one before scaling.
+        - Scorecard targets are **illustrative** until agreed with the
+          business.
         - Score improvements should be measured against a **validated
           baseline**, not against projections.
         """
@@ -1740,6 +1985,11 @@ def render_decision_record_tab(
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    st.set_page_config(
+        page_title="Customer Satisfaction Dashboard",
+        page_icon="📊",
+        layout="wide",
+    )
     _apply_global_style()
 
     try:
@@ -1775,6 +2025,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    facts = query_decision_facts(conn)
+
     (
         tab_overview,
         tab_theme,
@@ -1798,12 +2050,12 @@ def main() -> None:
     with tab_detail:
         render_detail_tab(conn)
     with tab_recommendations:
-        render_recommendations_tab()
+        render_recommendations_tab(facts)
     with tab_priorities:
-        render_priorities_tab()
+        render_priorities_tab(facts)
     with tab_decision:
         kpis = query_kpis(conn, year, state_json)
-        render_decision_record_tab(year, states, kpis)
+        render_decision_record_tab(year, states, kpis, facts)
 
     st.divider()
     st.caption(
