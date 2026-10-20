@@ -3,14 +3,23 @@
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
-Streamlit dashboard — 4 tabs, no chart duplication, no projector,
-no report tab. Every chart appears exactly once.
+Two dashboards in one app:
 
-Tabs:
-    Overview               — 4 KPI metrics + Chart 1 (review distribution)
-    Customer Satisfaction  — Charts 2–7, each filter-driven
-    Detail & Method        — Limitations + data-quality diagnostics
-    Findings & Recommendations — Recommendations + department ownership
+  📊 DATA ANALYSIS DASHBOARD — what happened?
+     Tabs 1–3: Overview · Customer Satisfaction · Detail & Method
+
+  🎯 DECISION DASHBOARD — what should we do?
+     Tabs 4–6: Findings & Recommendation · Priorities & Ownership ·
+               Decision Record
+
+Chart map (each chart appears exactly once):
+     Chart 1 · Q2  Review score distribution       → Tab 1 Overview
+     Chart 2 · Q3  Monthly average review score    → Tab 2 Customer Satisfaction
+     Chart 3 · Q4  Avg score by state (horizontal) → Tab 2 Customer Satisfaction
+     Chart 4 · Q5  On-time vs late by state        → Tab 2 Customer Satisfaction
+     Chart 5 · Q6  Punctuality vs satisfaction     → Tab 2 Customer Satisfaction
+     Chart 6 · Q9  Satisfaction by delivery bucket → Tab 2 Customer Satisfaction
+     Chart 7 · Q4  Brazil map (top-10 states)      → Tab 2 Customer Satisfaction
 
 Data tables loaded (4 — the minimum Group 1 requires):
     orders, customers, order_items, reviews
@@ -19,15 +28,6 @@ Reference KPIs (filters = All):
     Total Orders 99,441 · Delivered 96,478 · Avg Review 4.09
     Late 7,826 · Avg Delivery Days 12.56
     On-time 4.29 · Late 2.57 · Gap 1.73 stars
-
-Chart map (each chart appears exactly once):
-    Chart 1 — Q2 · Review score distribution      → Overview tab
-    Chart 2 — Q3 · Monthly average review score   → Customer Satisfaction tab
-    Chart 3 — Q4 · Avg review score by state      → Customer Satisfaction tab
-    Chart 4 — Q5 · On-time vs late by state       → Customer Satisfaction tab
-    Chart 5 — Q6 · Punctuality vs satisfaction    → Customer Satisfaction tab (advanced)
-    Chart 6 — Q9 · Satisfaction by delivery bucket → Customer Satisfaction tab (bonus)
-    Chart 7 — Q4 · Brazil state map               → Customer Satisfaction tab (bonus)
 
 Run:
     streamlit run olist_app.py
@@ -69,6 +69,7 @@ class Palette:
     green:        str = "#16A34A"
     blue:         str = "#0EA5E9"
     grey:         str = "#9CA3AF"
+    amber:        str = "#F59E0B"
 
 
 @dataclass(frozen=True)
@@ -330,14 +331,14 @@ def query_kpis(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §5  CHART FUNCTIONS
+# §5  CHART FUNCTIONS  (each chart appears exactly once)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _no_data_notice(msg: str = "No data for the current filters.") -> None:
     st.info(f"ℹ️ {msg} Try widening the Year or State filters.")
 
 
-# ── Chart 1 — Review score distribution (Q2 · unfiltered · Overview) ──────
+# ── Chart 1 — Review score distribution (Q2 · Overview · unfiltered) ──────
 
 def chart_review_distribution(conn: sqlite3.Connection) -> None:
     """Chart 1 — whole-dataset structural fact, intentionally unfiltered."""
@@ -387,7 +388,6 @@ def chart_review_distribution(conn: sqlite3.Connection) -> None:
 def chart_monthly_score(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 2 — monthly average score, filter-driven."""
     st.markdown("### Chart 2 · Monthly Average Review Score")
     df = safe_query(conn, """
         SELECT strftime('%Y-%m', o.order_purchase_timestamp) AS month,
@@ -437,12 +437,11 @@ def chart_monthly_score(
     )
 
 
-# ── Chart 3 — Avg score by state (Q4 · filterable · horizontal bar) ───────
+# ── Chart 3 — Avg score by state (Q4 · horizontal bar) ───────────────────
 
 def chart_state_scores(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 3 — top 10 states by order volume, horizontal bar."""
     st.markdown(
         "### Chart 3 · Average Review Score by State *(top 10 by orders)*"
     )
@@ -465,7 +464,6 @@ def chart_state_scores(
         _no_data_notice()
         return
 
-    # Horizontal bar: state on y, score on x. Lowest first so best is at top.
     plot_df = df.sort_values("avg_score", ascending=True)
     fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
                                     CONFIG.chart_height))
@@ -488,12 +486,11 @@ def chart_state_scores(
     )
 
 
-# ── Chart 4 — On-time vs late by state (Q5 · filterable · grouped) ───────
+# ── Chart 4 — On-time vs late by state (Q5 · grouped bar) ────────────────
 
 def chart_ontime_by_state(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 4 — top 5 states, on-time vs late grouped bar."""
     st.markdown(
         "### Chart 4 · On-Time vs Late Deliveries by State *(top 5)*"
     )
@@ -550,7 +547,6 @@ def chart_ontime_by_state(
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 5 — the advanced feature."""
     st.markdown(
         "### Chart 5 · Delivery Punctuality vs Satisfaction "
         "*(advanced feature · Q6)*"
@@ -607,12 +603,11 @@ def chart_punctuality_vs_satisfaction(
     )
 
 
-# ── Chart 6 — Satisfaction by delivery bucket (Q9 · filterable · bonus) ──
+# ── Chart 6 — Delivery buckets (Q9 · bonus) ──────────────────────────────
 
 def chart_satisfaction_by_delivery_bucket(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 6 — bonus, year+state filterable."""
     st.markdown(
         "### Chart 6 · Satisfaction by Delivery-Time Bucket *(bonus · Q9)*"
     )
@@ -685,7 +680,7 @@ def chart_satisfaction_by_delivery_bucket(
     )
 
 
-# ── Chart 7 — Brazil map (Q4 · filterable · bonus) ────────────────────────
+# ── Chart 7 — Brazil map (Q4 · bonus) ────────────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
@@ -724,7 +719,6 @@ def state_centroids() -> dict[str, tuple[float, float]]:
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 7 — bonus, top-10 states by volume."""
     st.markdown(
         "### Chart 7 · Brazil Map — Avg Review Score "
         "*(top 10 states by volume · bonus)*"
@@ -1006,6 +1000,21 @@ GLOBAL_CSS: Final[str] = """
     padding: 10px 12px; border-bottom: 1px solid #F0EBFA;
     vertical-align: top;
   }
+
+  .mode-badge {
+    display: inline-block; padding: 6px 14px;
+    border-radius: 20px; font-size: 12px; font-weight: 800;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .mode-analysis {
+    background: #EDE9FE; color: #4C1D95;
+    border: 1px solid #C4B5FD;
+  }
+  .mode-decision {
+    background: #FEF3C7; color: #92400E;
+    border: 1px solid #FDE68A;
+  }
 </style>
 """
 
@@ -1044,8 +1053,9 @@ def _apply_global_style() -> None:
 def render_sidebar() -> tuple[str, list[str]]:
     st.sidebar.title("📊 Filters")
     st.sidebar.markdown(
-        "Both filters apply to every filterable KPI card and every chart. "
-        "Set to *All* to reproduce the unfiltered reference values."
+        "Both filters apply to every filterable KPI card and every "
+        "chart on the **Data Analysis Dashboard**. Set to *All* to "
+        "reproduce the unfiltered reference values."
     )
 
     year = st.sidebar.selectbox(
@@ -1082,13 +1092,19 @@ def render_sidebar() -> tuple[str, list[str]]:
     return year, states
 
 
-# ── TAB 1 — Overview ─────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# 📊 DATA ANALYSIS DASHBOARD  — Tabs 1, 2, 3
+# ════════════════════════════════════════════════════════════════════════════
 
 def render_overview_tab(
     conn: sqlite3.Connection, year: str, state_json: str,
     filter_active: bool,
 ) -> None:
-    """Overview: KPI row + Chart 1 (review distribution)."""
+    """Tab 1 — KPI row + Chart 1 only."""
+    st.markdown(
+        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
+        unsafe_allow_html=True,
+    )
     st.markdown("## Overview")
     st.markdown(
         "Five headline KPIs plus the review-score distribution — the "
@@ -1151,12 +1167,14 @@ def render_overview_tab(
     chart_review_distribution(conn)
 
 
-# ── TAB 2 — Customer Satisfaction ────────────────────────────────────────
-
 def render_theme_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Charts 2–7, each appearing exactly once."""
+    """Tab 2 — Charts 2–7, each exactly once."""
+    st.markdown(
+        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
+        unsafe_allow_html=True,
+    )
     st.markdown("## Customer Satisfaction")
     st.markdown(
         "Charts 2–7 respond to the **Year** and **State** filters. "
@@ -1175,10 +1193,12 @@ def render_theme_tab(
     chart_brazil_map(conn, year, state_json)
 
 
-# ── TAB 3 — Detail & Method ──────────────────────────────────────────────
-
 def render_detail_tab(conn: sqlite3.Connection) -> None:
-    """Detail & Method: limitations + diagnostics (no charts)."""
+    """Tab 3 — Limitations + diagnostics (no charts)."""
+    st.markdown(
+        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
+        unsafe_allow_html=True,
+    )
     st.markdown("## Detail & Method")
     st.markdown(
         "The data-limitation note required by the brief, plus the "
@@ -1294,15 +1314,20 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
         )
 
 
-# ── TAB 4 — Findings & Recommendations ───────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# 🎯 DECISION DASHBOARD  — Tabs 4, 5, 6
+# ════════════════════════════════════════════════════════════════════════════
 
 def render_findings_tab() -> None:
-    """Findings & Recommendations: business findings + ownership."""
-    st.markdown("## Findings & Recommendations")
+    """Tab 4 — Headline + supporting facts + prioritised recommendations."""
     st.markdown(
-        "The headline finding, the three supporting facts, the "
-        "prioritised recommendations, and the department ownership "
-        "matrix."
+        '<span class="mode-badge mode-decision">🎯 Decision</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("## Findings & Recommendation")
+    st.markdown(
+        "The headline finding, three supporting facts, and the "
+        "prioritised recommendations that follow from them."
     )
 
     st.markdown("### The headline finding")
@@ -1389,7 +1414,19 @@ def render_findings_tab() -> None:
         variant="ok", tags=["Strategic", "Brand"],
     )
 
-    st.divider()
+
+def render_priorities_tab() -> None:
+    """Tab 5 — Department ownership + 90-day sequence."""
+    st.markdown(
+        '<span class="mode-badge mode-decision">🎯 Decision</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("## Priorities & Ownership")
+    st.markdown(
+        "Who owns which issue, which recommendation resolves it, and "
+        "which chart they can open to watch the metric move."
+    )
+
     st.markdown("### Department ownership matrix")
     st.markdown(
         """
@@ -1459,12 +1496,30 @@ def render_findings_tab() -> None:
         unsafe_allow_html=True,
     )
 
+    st.markdown("### Governance & accountability")
+    st.markdown(
+        """
+        - **Executive sponsor:** Head of Operations — resolves
+          cross-functional blockers, reviews monthly results.
+        - **Operational owner:** Logistics / Operations — accountable
+          for the delivery improvement plan and regional pilots.
+        - **Customer outcome owner:** Customer Experience — proactive
+          updates, complaint categorisation, service recovery.
+        - **Analytical support:** Data Science / Analytics — reliable
+          metrics, ETA evaluation, review-text analysis.
+        - **Data controls:** Data Engineering / Data Governance —
+          identity keys, data definitions, join-quality checks.
+        - **Commercial alignment:** Marketing — customer-facing promises
+          match delivery capability.
+        """
+    )
+
     st.markdown("### 90-day delivery sequence")
     phase_cols = st.columns(3)
     with phase_cols[0]:
         st.markdown("**Days 1–30 · Diagnose**")
         st.markdown(
-            "- Validate dashboard metrics against README reference.\n"
+            "- Validate dashboard metrics against the reference.\n"
             "- Build an RJ root-cause view (carrier × route × city).\n"
             "- Define baseline KPIs and alert thresholds."
         )
@@ -1482,6 +1537,129 @@ def render_findings_tab() -> None:
             "- Refine ETA model; decide what scales.\n"
             "- Report back to steering."
         )
+
+
+def render_decision_record_tab(
+    year: str, states: list[str], kpis: dict[str, Any]
+) -> None:
+    """Tab 6 — the formal decision record."""
+    st.markdown(
+        '<span class="mode-badge mode-decision">🎯 Decision</span>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("## Decision Record")
+    st.markdown(
+        "The formal decision this dashboard supports, the evidence chain "
+        "behind it, the assumptions the reviewer must acknowledge, and "
+        "the review cadence."
+    )
+
+    st.markdown("### Context")
+    st.markdown(
+        f"""
+        **Active filter:** Year = `{year}` ·
+        States = `{', '.join(states)}`
+
+        **Reference (filters = All):** Total Orders
+        **{fmt_int(kpis['total_orders'])}** · Delivered
+        **{fmt_int(kpis['delivered_orders'])}** · Avg Review
+        **{fmt_float(kpis['avg_review_score'])}** · Late
+        **{fmt_int(kpis['late_deliveries'])}** · Avg Delivery Days
+        **{fmt_float(kpis['avg_delivery_days'])}**
+        """
+    )
+
+    st.markdown("### Decision requested")
+    st.markdown(
+        """
+        Approve a **90-day evidence-led delivery reliability initiative**,
+        starting with an RJ diagnostic and a day-20 escalation process.
+        """
+    )
+
+    st.markdown("### Decision details")
+    st.markdown(
+        """
+        <div class="report-body">
+        <table>
+          <tbody>
+            <tr><td><b>Decision</b></td>
+                <td>Approve 90-day delivery-reliability initiative</td></tr>
+            <tr><td><b>Sponsor</b></td>
+                <td>Head of Operations</td></tr>
+            <tr><td><b>Accountable lead</b></td>
+                <td>Logistics / Operations</td></tr>
+            <tr><td><b>Supporting teams</b></td>
+                <td>Customer Experience · Data Science · Data Engineering
+                    · Regional Management · Marketing</td></tr>
+            <tr><td><b>Pilot market</b></td>
+                <td>BA (3.86, ~3,340 orders) alongside the RJ diagnostic</td></tr>
+            <tr><td><b>Primary success metric</b></td>
+                <td>Late-delivery rate (national: currently 8.1%)</td></tr>
+            <tr><td><b>Secondary metrics</b></td>
+                <td>On-time delivery; avg review score; % orders &gt; 20
+                    days; ETA error</td></tr>
+            <tr><td><b>Review cadence</b></td>
+                <td>Monthly at steering, with a 90-day formal gate</td></tr>
+          </tbody>
+        </table>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Evidence chain")
+    st.markdown(
+        """
+        1. **Headline:** On-time orders average 4.29 ★, late orders
+           average 2.57 ★ — a **1.73-star gap** (Chart 5).
+        2. **Breadth:** 7,826 orders (8.1% of delivered) arrive late,
+           so the effect touches a minority of customers but is large
+           enough to move the national average.
+        3. **Geography:** RJ accounts for the worst excess — 13.5% late
+           vs 5.9% national, across 12,687 orders (Chart 4).
+        4. **Threshold:** Satisfaction drops below the 4.09 national
+           average at every delivery bucket beyond 20 days (Chart 6).
+        5. **Severity:** When late, orders average 9.55 days past
+           estimate, worst case 189 days (Q7 diagnostic, Detail tab).
+        """
+    )
+
+    st.markdown("### Assumptions and caveats")
+    st.markdown(
+        """
+        - The 1.73-star gap is an **association, not proof of
+          causation**. Product quality, seller behaviour, distance and
+          communication all contribute.
+        - 2016 and 2018 are **partial years**; comparisons across
+          periods should account for this.
+        - Reviews are **voluntary**; scores reflect reviewers, not the
+          full customer base.
+        - The dashboard does **not** include a delivery-distance
+          feature; the RJ diagnosis should add one before scaling.
+        - Score improvements should be measured against a **validated
+          baseline**, not against projections.
+        """
+    )
+
+    st.markdown("### Next review")
+    st.markdown(
+        """
+        - **+30 days:** Baseline KPI validation complete; RJ root-cause
+          view in place.
+        - **+60 days:** Pilot live in RJ; day-20 alert threshold tuned.
+        - **+90 days:** Formal decision gate — scale, reshape, or stop.
+        """
+    )
+
+    st.divider()
+    st.caption(
+        "**Sign-off block:** This decision record is based on the "
+        "verified KPIs and charts reproduced in the Data Analysis "
+        "Dashboard tabs with filters = All. Any deviation from the "
+        "reference numbers in the sidebar should be investigated before "
+        "signature."
+    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1516,15 +1694,28 @@ def main() -> None:
                   text-align:center;'>
           PORA Academy Cohort 7 — Group 1 Capstone Project
         </p>
+        <p style='color:#9CA3AF; font-size:13px; margin-top:2px;
+                  text-align:center;'>
+          📊 Data Analysis Dashboard · 🎯 Decision Dashboard
+        </p>
         """,
         unsafe_allow_html=True,
     )
 
-    tab_overview, tab_theme, tab_detail, tab_findings = st.tabs([
-        "Overview",
-        "Customer Satisfaction",
-        "Detail & Method",
-        "Findings & Recommendations",
+    (
+        tab_overview,
+        tab_theme,
+        tab_detail,
+        tab_findings,
+        tab_priorities,
+        tab_decision,
+    ) = st.tabs([
+        "📊 Overview",
+        "📊 Customer Satisfaction",
+        "📊 Detail & Method",
+        "🎯 Findings & Recommendation",
+        "🎯 Priorities & Ownership",
+        "🎯 Decision Record",
     ])
 
     with tab_overview:
@@ -1535,6 +1726,11 @@ def main() -> None:
         render_detail_tab(conn)
     with tab_findings:
         render_findings_tab()
+    with tab_priorities:
+        render_priorities_tab()
+    with tab_decision:
+        kpis = query_kpis(conn, year, state_json)
+        render_decision_record_tab(year, states, kpis)
 
     st.divider()
     st.caption(
