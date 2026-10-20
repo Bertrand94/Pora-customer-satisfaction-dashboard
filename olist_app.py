@@ -6,20 +6,19 @@ PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 Two dashboards in one app:
 
   📊 DATA ANALYSIS DASHBOARD — what happened?
-     Tabs 1–3: Overview · Customer Satisfaction · Detail & Method
+     Overview · Customer Satisfaction · Detail & Method
 
   🎯 DECISION DASHBOARD — what should we do?
-     Tabs 4–6: Findings & Recommendation · Priorities & Ownership ·
-               Decision Record
+     Recommendations · Priorities & Ownership · Decision Record
 
 Chart map (each chart appears exactly once):
-     Chart 1 · Q2  Review score distribution       → Tab 1 Overview
-     Chart 2 · Q3  Monthly average review score    → Tab 2 Customer Satisfaction
-     Chart 3 · Q4  Avg score by state (horizontal) → Tab 2 Customer Satisfaction
-     Chart 4 · Q5  On-time vs late by state        → Tab 2 Customer Satisfaction
-     Chart 5 · Q6  Punctuality vs satisfaction     → Tab 2 Customer Satisfaction
-     Chart 6 · Q9  Satisfaction by delivery bucket → Tab 2 Customer Satisfaction
-     Chart 7 · Q4  Brazil map (top-10 states)      → Tab 2 Customer Satisfaction
+     Review score distribution          → Overview tab (unfiltered)
+     Monthly average review score       → Customer Satisfaction tab
+     Average review score by state      → Customer Satisfaction tab
+     On-time vs late by state           → Customer Satisfaction tab
+     Punctuality vs satisfaction        → Customer Satisfaction tab (advanced · Q6)
+     Satisfaction by delivery bucket    → Customer Satisfaction tab (bonus · Q9)
+     Brazil map (top-10 states)         → Customer Satisfaction tab (bonus)
 
 Data tables loaded (4 — the minimum Group 1 requires):
     orders, customers, order_items, reviews
@@ -69,7 +68,6 @@ class Palette:
     green:        str = "#16A34A"
     blue:         str = "#0EA5E9"
     grey:         str = "#9CA3AF"
-    amber:        str = "#F59E0B"
 
 
 @dataclass(frozen=True)
@@ -298,7 +296,7 @@ def fmt_float(value: Any, places: int = 2) -> str:
 def query_kpis(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> dict[str, Any]:
-    """Q1 — headline KPIs, filterable. Filters = All reproduces README."""
+    """Q1 — headline KPIs. Filters = All reproduces the README table."""
     df = safe_query(conn, """
         SELECT COUNT(DISTINCT o.order_id) AS total_orders,
                COUNT(DISTINCT CASE WHEN o.order_status = 'delivered'
@@ -338,11 +336,11 @@ def _no_data_notice(msg: str = "No data for the current filters.") -> None:
     st.info(f"ℹ️ {msg} Try widening the Year or State filters.")
 
 
-# ── Chart 1 — Review score distribution (Q2 · Overview · unfiltered) ──────
+# ── Review score distribution (Q2 · Overview · unfiltered) ────────────────
 
 def chart_review_distribution(conn: sqlite3.Connection) -> None:
-    """Chart 1 — whole-dataset structural fact, intentionally unfiltered."""
-    st.markdown("### Chart 1 · Review Score Distribution *(whole dataset)*")
+    """Whole-dataset structural fact — intentionally unfiltered."""
+    st.markdown("### Review Score Distribution *(whole dataset)*")
     df = safe_query(conn, """
         SELECT CAST(review_score AS INTEGER) AS score,
                COUNT(*) AS reviews,
@@ -383,12 +381,12 @@ def chart_review_distribution(conn: sqlite3.Connection) -> None:
     )
 
 
-# ── Chart 2 — Monthly average score (Q3 · filterable) ─────────────────────
+# ── Monthly average score (Q3 · filterable) ───────────────────────────────
 
 def chart_monthly_score(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 2 · Monthly Average Review Score")
+    st.markdown("### Monthly Average Review Score")
     df = safe_query(conn, """
         SELECT strftime('%Y-%m', o.order_purchase_timestamp) AS month,
                COUNT(*) AS reviews,
@@ -437,13 +435,13 @@ def chart_monthly_score(
     )
 
 
-# ── Chart 3 — Avg score by state (Q4 · horizontal bar) ───────────────────
+# ── Average review score by state (Q4 · horizontal bar) ───────────────────
 
 def chart_state_scores(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown(
-        "### Chart 3 · Average Review Score by State *(top 10 by orders)*"
+        "### Average Review Score by State *(top 10 by orders)*"
     )
     df = safe_query(conn, """
         SELECT c.customer_state AS state,
@@ -486,13 +484,13 @@ def chart_state_scores(
     )
 
 
-# ── Chart 4 — On-time vs late by state (Q5 · grouped bar) ────────────────
+# ── On-time vs late by state (Q5 · grouped bar) ───────────────────────────
 
 def chart_ontime_by_state(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown(
-        "### Chart 4 · On-Time vs Late Deliveries by State *(top 5)*"
+        "### On-Time vs Late Deliveries by State *(top 5)*"
     )
     df = safe_query(conn, """
         SELECT c.customer_state AS state,
@@ -542,14 +540,13 @@ def chart_ontime_by_state(
     )
 
 
-# ── Chart 5 — Punctuality vs satisfaction (Q6 · advanced) ────────────────
+# ── Punctuality vs satisfaction (Q6 · advanced feature) ───────────────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown(
-        "### Chart 5 · Delivery Punctuality vs Satisfaction "
-        "*(advanced feature · Q6)*"
+        "### Delivery Punctuality vs Satisfaction *(advanced feature · Q6)*"
     )
     df = safe_query(conn, """
         SELECT CASE WHEN o.order_delivered_customer_date
@@ -603,13 +600,13 @@ def chart_punctuality_vs_satisfaction(
     )
 
 
-# ── Chart 6 — Delivery buckets (Q9 · bonus) ──────────────────────────────
+# ── Delivery buckets (Q9 · bonus) ─────────────────────────────────────────
 
 def chart_satisfaction_by_delivery_bucket(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown(
-        "### Chart 6 · Satisfaction by Delivery-Time Bucket *(bonus · Q9)*"
+        "### Satisfaction by Delivery-Time Bucket *(bonus · Q9)*"
     )
     df = safe_query(conn, """
         SELECT CASE
@@ -680,7 +677,7 @@ def chart_satisfaction_by_delivery_bucket(
     )
 
 
-# ── Chart 7 — Brazil map (Q4 · bonus) ────────────────────────────────────
+# ── Brazil map (Q4 · bonus) ───────────────────────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
@@ -720,7 +717,7 @@ def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown(
-        "### Chart 7 · Brazil Map — Avg Review Score "
+        "### Brazil Map — Avg Review Score "
         "*(top 10 states by volume · bonus)*"
     )
     df = safe_query(conn, """
@@ -1015,6 +1012,26 @@ GLOBAL_CSS: Final[str] = """
     background: #FEF3C7; color: #92400E;
     border: 1px solid #FDE68A;
   }
+
+  .headline-story {
+    background: linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
+    border: 1px solid #E5DEF7; border-left: 5px solid #8B5CF6;
+    border-radius: 12px; padding: 22px 26px; margin: 8px 0 20px 0;
+    box-shadow: 0 4px 16px rgba(109, 63, 181, 0.10);
+    line-height: 1.75;
+  }
+  .headline-story p { margin: 0 0 10px 0; font-size: 16px; color: #3F3D56; }
+  .headline-story p:last-child { margin-bottom: 0; }
+  .headline-story .big {
+    font-size: 22px; font-weight: 700; color: #3F3D56;
+  }
+  .headline-story .star {
+    color: #D64545; font-size: 26px; font-weight: 800;
+  }
+  .headline-story .hl { color: #6D3FB5; font-weight: 700; }
+  .headline-story .takeaway {
+    color: #4C1D95; font-style: italic; font-weight: 600;
+  }
 </style>
 """
 
@@ -1093,14 +1110,14 @@ def render_sidebar() -> tuple[str, list[str]]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 📊 DATA ANALYSIS DASHBOARD  — Tabs 1, 2, 3
+# 📊 DATA ANALYSIS DASHBOARD  — Tabs 1–3
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_overview_tab(
     conn: sqlite3.Connection, year: str, state_json: str,
     filter_active: bool,
 ) -> None:
-    """Tab 1 — KPI row + Chart 1 only."""
+    """Overview — KPI row + review-score distribution (unfiltered)."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
@@ -1143,43 +1160,77 @@ def render_overview_tab(
         )
 
     st.divider()
-    st.markdown(
-        """
-        <div class="info-card">
-          <h4>Three facts before you read the charts</h4>
-          <ol style="margin-bottom:0; color:#3F3D56; line-height:1.75;">
-            <li><b>Late deliveries cost 1.73 stars.</b> On-time = 4.29;
-                late = 2.57. Only 8.1% of orders, but the strongest
-                satisfaction driver in the dataset.</li>
-            <li><b>RJ is the operational outlier.</b> 13.5% late rate —
-                2.3× the 5.9% national average — with 12,687 orders of
-                leverage.</li>
-            <li><b>The decline is smooth, not a cliff.</b> Scores drop
-                from 4.45 to 2.26 across five delivery-time buckets;
-                every bucket past 20 days falls below 4.09.</li>
-          </ol>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.divider()
     chart_review_distribution(conn)
 
 
 def render_theme_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Tab 2 — Charts 2–7, each exactly once."""
+    """Customer Satisfaction — all filterable charts, each exactly once."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Customer Satisfaction")
     st.markdown(
-        "Charts 2–7 respond to the **Year** and **State** filters. "
-        "Each chart appears exactly once across the whole dashboard."
+        "Charts respond to the **Year** and **State** filters. Each "
+        "chart appears exactly once across the whole dashboard."
     )
+
+    st.divider()
+    st.markdown(
+        """
+        <div class="headline-story">
+          <p class="big">
+            Late deliveries cost you <span class="star">1.73 stars</span>.
+          </p>
+          <p>
+            On-time orders average <span class="hl">4.294</span>;
+            late ones average <span class="hl">2.566</span>.
+          </p>
+          <p class="takeaway">
+            That is the single strongest satisfaction driver in this
+            dataset, and it is the insight your presentation should be
+            built around.
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Three supporting facts")
+    fact_cols = st.columns(3)
+    fact_cols[0].metric(
+        "Late deliveries",
+        "7,826",
+        delta="8.1% of delivered orders",
+        delta_color="inverse",
+    )
+    fact_cols[1].metric(
+        "Avg days past estimate (when late)",
+        "9.55 d",
+        delta="worst case 189 d",
+        delta_color="inverse",
+    )
+    fact_cols[2].metric(
+        "Reviews fan-out",
+        "99,224 rows",
+        delta="98,673 distinct orders",
+        delta_color="off",
+    )
+    st.caption(
+        "Use `COUNT(DISTINCT order_id)` across any join — plain "
+        "`COUNT(*)` overstates order volume by 551 rows."
+    )
+
+    st.info(
+        "**Split for the headline, buckets for the nuance.** The binary "
+        "on-time/late split is the headline (4.29 vs 2.57). The "
+        "delivery-time buckets below show the score decline more "
+        "smoothly (4.45 → 4.36 → 4.22 → 3.69 → 2.26). Use both."
+    )
+
+    st.divider()
     chart_monthly_score(conn, year, state_json)
     st.divider()
     chart_state_scores(conn, year, state_json)
@@ -1194,7 +1245,7 @@ def render_theme_tab(
 
 
 def render_detail_tab(conn: sqlite3.Connection) -> None:
-    """Tab 3 — Limitations + diagnostics (no charts)."""
+    """Detail & Method — limitations + diagnostics (no charts)."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
@@ -1295,17 +1346,17 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.markdown("**Q10 · Reviews fan-out**")
+        st.markdown("**Reviews fan-out**")
         if not reviews_qa.empty:
             st.dataframe(reviews_qa, hide_index=True,
                          use_container_width=True)
     with c2:
-        st.markdown("**Q11 · Customer identity**")
+        st.markdown("**Customer identity**")
         if not customers_qa.empty:
             st.dataframe(customers_qa, hide_index=True,
                          use_container_width=True)
 
-    st.markdown("**Q7 · Days late when late**")
+    st.markdown("**Days late when late**")
     if not days_late.empty:
         st.dataframe(days_late, hide_index=True, use_container_width=True)
         st.caption(
@@ -1315,43 +1366,65 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 🎯 DECISION DASHBOARD  — Tabs 4, 5, 6
+# 🎯 DECISION DASHBOARD  — Tabs 4–6
 # ════════════════════════════════════════════════════════════════════════════
 
-def render_findings_tab() -> None:
-    """Tab 4 — Headline + supporting facts + prioritised recommendations."""
+def render_recommendations_tab() -> None:
+    """Recommendations — headline + supporting facts + prioritised actions."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
     )
-    st.markdown("## Findings & Recommendation")
+    st.markdown("## Recommendations")
     st.markdown(
-        "The headline finding, three supporting facts, and the "
+        "The headline finding, the three supporting facts, and the "
         "prioritised recommendations that follow from them."
     )
 
-    st.markdown("### The headline finding")
-    info_card(
-        "Late deliveries cost 1.73 stars",
-        """<p>On-time orders average <b>4.29 ★</b>; late orders average
-        <b>2.57 ★</b>. That is the single strongest satisfaction driver
-        in the Olist dataset.</p>
-        <p>Only <b>8.1%</b> of delivered orders (7,826) arrive late, but
-        the effect is disproportionate: when late, orders run
-        <b>9.55 days past estimate</b> on average, with a worst case of
-        <b>189 days</b>.</p>""",
-        variant="ok",
-        tags=["Headline", "1.73 stars", "8.1% late"],
+    st.markdown("### Headline")
+    st.markdown(
+        """
+        <div class="headline-story">
+          <p class="big">
+            Late deliveries cost you <span class="star">1.73 stars</span>.
+          </p>
+          <p>
+            On-time orders average <span class="hl">4.294</span>;
+            late ones average <span class="hl">2.566</span>.
+          </p>
+          <p class="takeaway">
+            That is the single strongest satisfaction driver in this
+            dataset, and it is the insight your presentation should be
+            built around.
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.markdown("### Three supporting facts")
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("On-time avg score", "4.29 ★",
-                 delta="88,171 orders", delta_color="off")
-    col_b.metric("Late avg score", "2.57 ★",
-                 delta="7,661 orders", delta_color="inverse")
-    col_c.metric("Avg days late", "9.55 d",
-                 delta="worst case 189 d", delta_color="inverse")
+    st.markdown(
+        """
+        <div class="info-card">
+          <ol style="margin-bottom:0; color:#3F3D56; line-height:1.9;">
+            <li><b>7,826 delivered orders (8.1%)</b> arrived after their
+                estimated delivery date.</li>
+            <li>When late, orders average <b>9.55 days past the
+                estimate</b>.</li>
+            <li>Reviews are a fan-out table — <b>99,224 rows for
+                98,673 orders</b>. Use <code>COUNT(DISTINCT order_id)</code>
+                or your order counts will be wrong.</li>
+          </ol>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.info(
+        "**Q9 (delivery-time buckets) shows the score decline more "
+        "smoothly than the binary on-time/late split.** Use both — the "
+        "split for the headline, the buckets for the nuance."
+    )
 
     st.divider()
     st.markdown("### Prioritised recommendations")
@@ -1416,7 +1489,7 @@ def render_findings_tab() -> None:
 
 
 def render_priorities_tab() -> None:
-    """Tab 5 — Department ownership + 90-day sequence."""
+    """Priorities & Ownership — department matrix + 90-day sequence."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
@@ -1445,31 +1518,31 @@ def render_priorities_tab() -> None:
               <td><b>Logistics / Operations</b></td>
               <td>RJ late rate (13.5%); nationwide 20-day tail</td>
               <td>R1, R2</td>
-              <td>Chart 4 · Chart 6</td>
+              <td>On-Time vs Late by State · Delivery Buckets</td>
             </tr>
             <tr>
               <td><b>Logistics + CX</b></td>
               <td>Proactive SLA on orders nearing day 20</td>
               <td>R2</td>
-              <td>Chart 5 · Chart 6</td>
+              <td>Punctuality vs Satisfaction · Delivery Buckets</td>
             </tr>
             <tr>
               <td><b>Data Science + Logistics</b></td>
               <td>EDD model recalibration</td>
               <td>R3</td>
-              <td>Chart 2 · Q7 diagnostic</td>
+              <td>Monthly Avg Review Score · Days-Late Diagnostic</td>
             </tr>
             <tr>
               <td><b>Regional Operations</b></td>
               <td>BA (3.86) satisfaction</td>
               <td>R4</td>
-              <td>Chart 3 · Chart 7</td>
+              <td>Avg Score by State · Brazil Map</td>
             </tr>
             <tr>
               <td><b>CX Analytics</b></td>
               <td>1★/2★ review-text themes</td>
               <td>(future)</td>
-              <td>Chart 1</td>
+              <td>Review Score Distribution</td>
             </tr>
             <tr>
               <td><b>Data Engineering</b></td>
@@ -1481,7 +1554,7 @@ def render_priorities_tab() -> None:
               <td><b>Marketing + Logistics</b></td>
               <td>Delivery-certainty positioning</td>
               <td>R5</td>
-              <td>Chart 5 · Chart 1</td>
+              <td>Punctuality vs Satisfaction · Review Distribution</td>
             </tr>
             <tr>
               <td><b>Executive / Steering</b></td>
@@ -1542,7 +1615,7 @@ def render_priorities_tab() -> None:
 def render_decision_record_tab(
     year: str, states: list[str], kpis: dict[str, Any]
 ) -> None:
-    """Tab 6 — the formal decision record."""
+    """Decision Record — the formal decision this dashboard supports."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
@@ -1611,17 +1684,17 @@ def render_decision_record_tab(
     st.markdown("### Evidence chain")
     st.markdown(
         """
-        1. **Headline:** On-time orders average 4.29 ★, late orders
-           average 2.57 ★ — a **1.73-star gap** (Chart 5).
+        1. **Headline:** On-time orders average 4.294 ★, late orders
+           average 2.566 ★ — a **1.73-star gap**.
         2. **Breadth:** 7,826 orders (8.1% of delivered) arrive late,
            so the effect touches a minority of customers but is large
            enough to move the national average.
         3. **Geography:** RJ accounts for the worst excess — 13.5% late
-           vs 5.9% national, across 12,687 orders (Chart 4).
+           vs 5.9% national, across 12,687 orders.
         4. **Threshold:** Satisfaction drops below the 4.09 national
-           average at every delivery bucket beyond 20 days (Chart 6).
+           average at every delivery bucket beyond 20 days.
         5. **Severity:** When late, orders average 9.55 days past
-           estimate, worst case 189 days (Q7 diagnostic, Detail tab).
+           estimate, worst case 189 days.
         """
     )
 
@@ -1706,14 +1779,14 @@ def main() -> None:
         tab_overview,
         tab_theme,
         tab_detail,
-        tab_findings,
+        tab_recommendations,
         tab_priorities,
         tab_decision,
     ) = st.tabs([
         "📊 Overview",
         "📊 Customer Satisfaction",
         "📊 Detail & Method",
-        "🎯 Findings & Recommendation",
+        "🎯 Recommendations",
         "🎯 Priorities & Ownership",
         "🎯 Decision Record",
     ])
@@ -1724,8 +1797,8 @@ def main() -> None:
         render_theme_tab(conn, year, state_json)
     with tab_detail:
         render_detail_tab(conn)
-    with tab_findings:
-        render_findings_tab()
+    with tab_recommendations:
+        render_recommendations_tab()
     with tab_priorities:
         render_priorities_tab()
     with tab_decision:
@@ -1736,9 +1809,9 @@ def main() -> None:
     st.caption(
         "**Reference (filters = All):** Total Orders 99,441 · Delivered "
         "96,478 · Avg Review 4.09 · Late 7,826 · Avg Delivery Days 12.56. "
-        "Chart 1 (Review Score Distribution) is intentionally unfiltered "
-        "— a whole-dataset fact. Every filterable chart reconciles to "
-        "the verified README tables with filters = All."
+        "Review Score Distribution is intentionally unfiltered — a "
+        "whole-dataset fact. Every filterable chart reconciles to the "
+        "verified README tables with filters = All."
     )
 
 
