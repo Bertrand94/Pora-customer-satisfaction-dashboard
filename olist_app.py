@@ -6,13 +6,13 @@ PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 EVERY chart responds to the sidebar filters (Reporting Year + State).
 
 Tabs:
-    Overview               — KPI row · Review score distribution
-                             Monthly trend · Review volume by year (pie)
-    Customer Satisfaction  — Score by state · On-time vs late
-                             Punctuality vs satisfaction
-                             Delivery buckets · Brazil map (complete)
-    Detail & Method        — Delivery punctuality pie · limitations
-                             + diagnostics
+    Overview               — KPI row · Review score distribution + Review
+                             volume by year (side by side)
+    Customer Satisfaction  — Score by state + Brazil map (side by side)
+                             On-time vs late + Delivery buckets (side by side)
+                             Punctuality vs satisfaction + Monthly trend
+                             (side by side)
+    Detail & Method        — limitations + whole-dataset diagnostics
     Recommendations        — prioritised actions (whole dataset)
 
 Reference KPIs (filters = All):
@@ -40,6 +40,7 @@ from typing import Any, Final, Iterable, Sequence
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
+import plotly.express as px
 import requests
 import streamlit as st
 from matplotlib.ticker import FuncFormatter
@@ -109,12 +110,12 @@ class Config:
     geojson_cache_ttl_seconds: Final[int] = 86400
 
     chart_width_wide:   Final[float] = 11.0
-    chart_width_normal: Final[float] = 10.0
-    chart_width_narrow: Final[float] =  9.0
+    chart_width_normal: Final[float] =  9.0
+    chart_width_narrow: Final[float] =  8.0
     chart_height:       Final[float] =  5.5
     chart_height_short: Final[float] =  4.5
     pie_height:         Final[float] =  5.0
-    map_height:         Final[float] =  8.5
+    map_height:         Final[float] =  6.5
 
     min_reviews_per_month: Final[int] = 30
 
@@ -544,7 +545,7 @@ def chart_review_volume_by_year(
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
-    biggest = df.loc[df["reviews"].idxmax()]
+    biggest  = df.loc[df["reviews"].idxmax()]
     smallest = df.loc[df["reviews"].idxmin()]
     _insight(
         year, state_json,
@@ -672,7 +673,7 @@ def chart_ontime_by_state(
     _insight(year, state_json, text)
 
 
-# ── Punctuality vs satisfaction ─────────────────────────────────────────
+# ── Punctuality vs satisfaction (matplotlib + Plotly companion) ─────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -733,6 +734,63 @@ def chart_punctuality_vs_satisfaction(
             "on-time vs late gap can be computed."
         )
     _insight(year, state_json, text)
+
+    # ── Plotly companion: "On-time / early" vs "Late" ────────────────────
+    plotly_df = df.copy()
+    plotly_df["delivery_status"] = plotly_df["delivery_status"].map({
+        "On Time": "On-time / early",
+        "Late":    "Late",
+    })
+    plotly_df["delivery_status"] = pd.Categorical(
+        plotly_df["delivery_status"],
+        categories=["On-time / early", "Late"],
+        ordered=True,
+    )
+    plotly_df = plotly_df.sort_values("delivery_status").reset_index(drop=True)
+
+    fig_plotly = px.bar(
+        plotly_df,
+        x="delivery_status",
+        y="avg_score",
+        color="delivery_status",
+        text="avg_score",
+        color_discrete_map={
+            "On-time / early": "#16A34A",
+            "Late":            "#DC2626",
+        },
+        labels={
+            "delivery_status":   "Delivery punctuality",
+            "avg_score":         "Average review score",
+        },
+        title="Q6: Delivery Punctuality vs Customer Satisfaction",
+    )
+    fig_plotly.update_traces(
+        texttemplate="%{text:.2f} stars",
+        textposition="outside",
+    )
+    fig_plotly.update_layout(
+        yaxis=dict(range=[0, 5], dtick=1),
+        showlegend=False,
+        height=450,
+    )
+    st.plotly_chart(fig_plotly, use_container_width=True)
+
+    # Key-finding info box for the Plotly companion
+    score_by_label = plotly_df.set_index("delivery_status")["avg_score"]
+    if (
+        "On-time / early" in score_by_label.index
+        and "Late" in score_by_label.index
+    ):
+        gap = (
+            score_by_label["On-time / early"]
+            - score_by_label["Late"]
+        )
+        st.info(
+            f"Key finding: On-time/early deliveries average "
+            f"{score_by_label['On-time / early']:.2f} stars, compared with "
+            f"{score_by_label['Late']:.2f} stars for late deliveries — "
+            f"a difference of {gap:.2f} stars."
+        )
 
 
 # ── Delivery buckets ────────────────────────────────────────────────────
@@ -874,7 +932,7 @@ def _plot_geojson_state(
     geometry: dict[str, Any],
     facecolor: str,
     edgecolor: str = "#FFFFFF",
-    linewidth: float = 0.8,
+    linewidth: float = 0.6,
 ) -> None:
     gtype  = geometry.get("type")
     coords = geometry.get("coordinates")
@@ -955,13 +1013,13 @@ def chart_brazil_map(
     cmap = plt.get_cmap("RdYlGn")
     norm = mpl.colors.Normalize(vmin=lo_c, vmax=hi_c)
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_wide,
+    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
                                     CONFIG.map_height))
     ax.set_axis_off()
     ax.set_title(
         f"Average Review Score by State — {scope_label(year, state_json)}",
-        fontsize=13, fontweight="bold", color=PALETTE.purple_dark,
-        pad=14,
+        fontsize=12, fontweight="bold", color=PALETTE.purple_dark,
+        pad=12,
     )
 
     for _, row in gdf.iterrows():
@@ -1014,7 +1072,7 @@ def chart_brazil_map(
         ax.text(
             cx, cy, label,
             ha="center", va="center",
-            fontsize=7.5, color=color, fontweight=weight, zorder=5,
+            fontsize=6.5, color=color, fontweight=weight, zorder=5,
         )
 
     ax.set_xlim(-74.0, -34.0)
@@ -1027,9 +1085,9 @@ def chart_brazil_map(
         sm, ax=ax, orientation="horizontal",
         fraction=0.04, pad=0.04, shrink=0.7,
     )
-    cbar.set_label("Average review score (1–5)", fontsize=10,
+    cbar.set_label("Average review score (1–5)", fontsize=9,
                    color=PALETTE.purple_dark)
-    cbar.ax.tick_params(labelsize=9)
+    cbar.ax.tick_params(labelsize=8)
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -1053,55 +1111,6 @@ def chart_brazil_map(
         year, state_json,
         f"{lo_s} ({lo_v:.2f}) is lowest and {hi_s} ({hi_v:.2f}) is "
         f"highest among states in the current selection. {mode_note}",
-    )
-
-
-# ── Delivery punctuality pie ────────────────────────────────────────────
-
-def chart_punctuality_pie(
-    conn: sqlite3.Connection, year: str, state_json: str
-) -> None:
-    st.markdown("### Delivery Punctuality Share *(pie)*")
-    df = safe_query(conn, f"""
-        SELECT CASE WHEN o.order_delivered_customer_date
-                         <= o.order_estimated_delivery_date
-                    THEN 'On Time' ELSE 'Late' END AS delivery_status,
-               COUNT(DISTINCT o.order_id) AS orders
-        FROM orders o
-        JOIN customers c ON o.customer_id = c.customer_id
-        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
-        GROUP BY 1
-    """, params=year_multi(year, state_json), label="punctuality pie")
-
-    if df.empty:
-        _no_data_notice()
-        return
-
-    total = int(df["orders"].sum())
-    color_map = {"On Time": PALETTE.green, "Late": PALETTE.red}
-    colors = [color_map.get(s, PALETTE.grey) for s in df["delivery_status"]]
-
-    fig, ax = plt.subplots(figsize=(CONFIG.pie_height, CONFIG.pie_height))
-    ax.pie(
-        df["orders"],
-        labels=df["delivery_status"],
-        autopct=lambda pct: f"{pct:.1f}%\n({int(round(pct / 100 * total)):,})",
-        startangle=90,
-        colors=colors,
-        explode=[0.08 if s == "Late" else 0 for s in df["delivery_status"]],
-        textprops={"fontsize": 12, "fontweight": "bold"},
-    )
-    ax.set_title("On-Time vs Late Delivery Share",
-                 fontsize=13, fontweight="bold", color=PALETTE.purple_dark)
-    st.pyplot(fig, use_container_width=True)
-    plt.close(fig)
-
-    late = int(df.loc[df["delivery_status"] == "Late", "orders"].sum())
-    late_pct = 100.0 * late / total if total else 0.0
-    _insight(
-        year, state_json,
-        f"{late:,} of {total:,} delivered orders ({late_pct:.1f}%) "
-        f"arrived after the estimated date.",
     )
 
 
@@ -1243,18 +1252,18 @@ def _apply_global_style() -> None:
         "axes.linewidth":     0.9,
         "font.family":        "sans-serif",
         "font.size":          11,
-        "axes.titlesize":     14,
+        "axes.titlesize":     13,
         "axes.titleweight":   "bold",
         "axes.titlecolor":    "#4C1D95",
         "axes.titlelocation": "center",
-        "axes.labelsize":     11,
+        "axes.labelsize":     10,
         "axes.labelcolor":    "#6B7280",
         "xtick.color":        "#6B7280",
         "ytick.color":        "#6B7280",
-        "xtick.labelsize":    10,
-        "ytick.labelsize":    10,
+        "xtick.labelsize":    9,
+        "ytick.labelsize":    9,
         "legend.frameon":     False,
-        "legend.fontsize":    10,
+        "legend.fontsize":    9,
     })
 
 
@@ -1343,16 +1352,11 @@ def render_overview_tab(
 
     st.divider()
 
+    # Side by side: Review Score Distribution | Review Volume Share by Year
     col_left, col_right = st.columns([1, 1])
     with col_left:
         chart_review_distribution(conn, year, state_json)
     with col_right:
-        chart_monthly_score(conn, year, state_json)
-
-    st.divider()
-
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
         chart_review_volume_by_year(conn, year, state_json)
 
 
@@ -1365,24 +1369,30 @@ def render_theme_tab(
 ) -> None:
     st.markdown("## Customer Satisfaction")
 
+    # Row A: Score by state | Brazil map
     col_a, col_b = st.columns([1, 1])
     with col_a:
         chart_state_scores(conn, year, state_json)
     with col_b:
-        chart_ontime_by_state(conn, year, state_json)
+        chart_brazil_map(conn, year, state_json)
 
     st.divider()
-    chart_punctuality_vs_satisfaction(conn, year, state_json)
 
-    st.divider()
+    # Row B: On-time vs late | Delivery buckets
     col_c, col_d = st.columns([1, 1])
     with col_c:
-        chart_satisfaction_by_delivery_bucket(conn, year, state_json)
+        chart_ontime_by_state(conn, year, state_json)
     with col_d:
-        st.empty()
+        chart_satisfaction_by_delivery_bucket(conn, year, state_json)
 
     st.divider()
-    chart_brazil_map(conn, year, state_json)
+
+    # Row C: Punctuality vs satisfaction | Monthly trend
+    col_e, col_f = st.columns([1, 1])
+    with col_e:
+        chart_punctuality_vs_satisfaction(conn, year, state_json)
+    with col_f:
+        chart_monthly_score(conn, year, state_json)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1393,12 +1403,6 @@ def render_detail_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
     st.markdown("## Detail & Method")
-
-    _, mid, _ = st.columns([1, 2, 1])
-    with mid:
-        chart_punctuality_pie(conn, year, state_json)
-
-    st.divider()
 
     st.markdown("### Data limitations")
 
