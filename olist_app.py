@@ -8,12 +8,12 @@ EVERY chart responds to the sidebar filters (Reporting Year + State).
 Tabs:
     📊 Overview               — KPI row · Chart 1 (score distribution bar)
                                 Chart 2 (monthly trend)
-                                Chart 3 (score pie)                  [NEW]
+                                Chart 3 (score pie)
     📊 Customer Satisfaction  — Chart 4 (score by state) · Chart 5 (on-time vs late)
-                                Chart 6 (punctuality vs satisfaction · Q6)
-                                Chart 7 (delivery buckets · Q9)
-                                Chart 8 (Brazil map)
-    📊 Detail & Method        — Chart 9 (delivery punctuality pie)   [NEW]
+                                Chart 6 (punctuality vs satisfaction)
+                                Chart 7 (delivery buckets)
+                                Chart 8 (Brazil map · complete)
+    📊 Detail & Method        — Chart 9 (delivery punctuality pie)
                                 limitations + diagnostics
     🎯 Recommendations        — prioritised actions (whole dataset)
 
@@ -42,7 +42,6 @@ from typing import Any, Final, Iterable, Sequence
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 from matplotlib.ticker import FuncFormatter
@@ -63,6 +62,7 @@ class Palette:
     green_light:  str = "#86EFAC"
     blue:         str = "#0EA5E9"
     grey:         str = "#9CA3AF"
+    grey_light:   str = "#E5E7EB"
     slate:        str = "#3F3F5A"
 
 
@@ -116,6 +116,7 @@ class Config:
     chart_height:       Final[float] =  5.5
     chart_height_short: Final[float] =  4.5
     pie_height:         Final[float] =  5.0
+    map_height:         Final[float] =  8.5
 
     min_reviews_per_month: Final[int] = 30
 
@@ -214,10 +215,6 @@ def build_connection() -> sqlite3.Connection:
 
 
 # ── Filter contract ────────────────────────────────────────────────────────
-#
-# Every query that touches orders (alias `o`) and customers (alias `c`)
-# appends FILTER_SQL to its WHERE clause and passes year_multi(...) as its
-# four parameters.
 
 FILTER_SQL: Final[str] = """
           (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
@@ -356,7 +353,7 @@ def query_kpis(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §5  CHART FUNCTIONS  (10 unique charts, no duplication)
+# §5  CHART FUNCTIONS  (9 unique charts, no duplication)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _no_data_notice(msg: str = "No data for the current filters.") -> None:
@@ -499,7 +496,7 @@ def chart_monthly_score(
     )
 
 
-# ── Chart 3 · Review score share (PIE)  [NEW] ─────────────────────────────
+# ── Chart 3 · Review score share (pie) ───────────────────────────────────
 
 def chart_score_pie(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -667,14 +664,12 @@ def chart_ontime_by_state(
     _insight(year, state_json, text)
 
 
-# ── Chart 6 · Punctuality vs satisfaction (Q6 · advanced feature) ────────
+# ── Chart 6 · Punctuality vs satisfaction ────────────────────────────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        "### Chart 6 — Delivery Punctuality vs Satisfaction *(advanced · Q6)*"
-    )
+    st.markdown("### Chart 6 — Delivery Punctuality vs Satisfaction")
     df = safe_query(conn, f"""
         SELECT CASE WHEN o.order_delivered_customer_date
                          <= o.order_estimated_delivery_date
@@ -732,12 +727,12 @@ def chart_punctuality_vs_satisfaction(
     _insight(year, state_json, text)
 
 
-# ── Chart 7 · Delivery buckets (Q9 · bonus) ──────────────────────────────
+# ── Chart 7 · Delivery buckets ───────────────────────────────────────────
 
 def chart_satisfaction_by_delivery_bucket(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 7 — Satisfaction by Delivery-Time Bucket *(Q9)*")
+    st.markdown("### Chart 7 — Satisfaction by Delivery-Time Bucket")
     df = safe_query(conn, f"""
         SELECT CASE
                  WHEN julianday(o.order_delivered_customer_date)
@@ -828,14 +823,16 @@ def chart_satisfaction_by_delivery_bucket(
     _insight(year, state_json, text)
 
 
-# ── Chart 8 · Brazil map ─────────────────────────────────────────────────
+# ── Chart 8 · Brazil map (COMPLETE · matplotlib) ─────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
     last_err: Exception | None = None
     for url in CONFIG.geojson_urls:
         try:
-            response = requests.get(url, timeout=CONFIG.geojson_timeout_seconds)
+            response = requests.get(
+                url, timeout=CONFIG.geojson_timeout_seconds
+            )
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as exc:
@@ -844,30 +841,72 @@ def load_brazil_geojson() -> dict[str, Any]:
     raise RuntimeError(f"All GeoJSON mirrors failed. Last error: {last_err}")
 
 
-@st.cache_data(show_spinner=False)
-def state_centroids() -> dict[str, tuple[float, float]]:
-    return {
-        "AC": (-9.0238,   -70.8120), "AL": (-9.5713,   -36.7820),
-        "AM": (-3.4168,   -65.8561), "AP": ( 1.4100,   -51.7700),
-        "BA": (-12.5797,  -41.7007), "CE": (-5.4984,   -39.3206),
-        "DF": (-15.7998,  -47.8645), "ES": (-19.1834,  -40.3089),
-        "GO": (-15.8270,  -49.8362), "MA": (-4.9609,   -45.2744),
-        "MG": (-18.5122,  -44.5550), "MS": (-20.7722,  -54.7852),
-        "MT": (-12.6819,  -56.9211), "PA": (-3.7900,   -52.4800),
-        "PB": (-7.2400,   -36.7820), "PE": (-8.8137,   -36.9541),
-        "PI": (-7.7183,   -42.7289), "PR": (-24.8934,  -51.5300),
-        "RJ": (-22.9068,  -43.1729), "RN": (-5.7945,   -36.5298),
-        "RO": (-11.5057,  -63.5806), "RR": ( 2.7376,   -62.0751),
-        "RS": (-30.0346,  -51.2177), "SC": (-27.2423,  -50.2189),
-        "SE": (-10.5741,  -37.3857), "SP": (-23.5505,  -46.6333),
-        "TO": (-10.1753,  -48.2982),
-    }
+def _geojson_to_gdf(geojson: dict[str, Any]) -> pd.DataFrame:
+    """Convert a Brazil-states GeoJSON FeatureCollection into a dataframe
+    with one row per state.  Uses shapely + matplotlib PathPatch, avoiding
+    a hard geopandas dependency."""
+    rows: list[dict[str, Any]] = []
+    for feat in geojson.get("features", []):
+        props = feat.get("properties", {}) or {}
+        sigla = (
+            props.get("sigla")
+            or props.get("SIGLA")
+            or props.get("abbrev")
+            or props.get("code")
+            or props.get("name")
+        )
+        if not sigla:
+            continue
+        rows.append({
+            "state": str(sigla).upper(),
+            "geometry": feat.get("geometry", {}),
+        })
+    return pd.DataFrame(rows)
+
+
+def _plot_geojson_state(
+    ax: plt.Axes,
+    geometry: dict[str, Any],
+    facecolor: str,
+    edgecolor: str = "#FFFFFF",
+    linewidth: float = 0.8,
+) -> None:
+    """Draw a single GeoJSON geometry (Polygon / MultiPolygon) on ax."""
+    gtype = geometry.get("type")
+    coords = geometry.get("coordinates")
+    if not gtype or not coords:
+        return
+
+    polygons: list[list[list[tuple[float, float]]]] = []
+    if gtype == "Polygon":
+        polygons = [coords]
+    elif gtype == "MultiPolygon":
+        polygons = coords
+
+    for poly in polygons:
+        # poly is a list of rings; ring 0 is the exterior
+        for ring_idx, ring in enumerate(poly):
+            if not ring:
+                continue
+            xs = [pt[0] for pt in ring]
+            ys = [pt[1] for pt in ring]
+            ax.fill(
+                xs, ys,
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                linewidth=linewidth,
+                zorder=2 if ring_idx == 0 else 3,
+            )
 
 
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 8 — Brazil Map · Avg Review Score")
+    """Chart 8 · Complete Brazil map — all 27 states shown, colored by the
+    average review score for the current selection.  States not in the
+    current filter are rendered in a light grey but remain visible."""
+    st.markdown("### Chart 8 — Brazil Map · Avg Review Score *(complete)*")
+
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
@@ -877,46 +916,14 @@ def chart_brazil_map(
         JOIN reviews r  ON o.order_id  = r.order_id
         WHERE {YEAR_SQL}
         GROUP BY state
-    """, params=year_params(year), label="Brazil map")
+    """, params=year_params(year), label="Brazil map data")
 
     if df.empty:
         _no_data_notice("No state-level data for this year.")
         return
 
-    selected      = selected_states(state_json)
-    filter_active = len(selected) > 0
-
-    if filter_active:
-        colored = df[df["state"].isin(selected)].copy()
-        greyed  = df[~df["state"].isin(selected)].copy()
-        if colored.empty:
-            _no_data_notice("The selected states have no reviewed orders "
-                            "in this period.")
-            return
-        mode_note = "Selected states are coloured; the rest are greyed out."
-    else:
-        colored = df.nlargest(10, "orders").copy()
-        greyed  = df.iloc[0:0].copy()
-        mode_note = "Showing the 10 states with the most orders."
-
-    colored["display_score"] = colored["avg_score"]
-    colored["hover"] = colored.apply(
-        lambda r: f"{r['avg_score']:.2f} avg · {int(r['orders']):,} orders",
-        axis=1,
-    )
-    greyed["display_score"] = -1.0
-    greyed["hover"] = "Not in current filter"
-    grid = pd.concat([colored, greyed], ignore_index=True)
-
-    centroids = state_centroids()
-    colored["lat"] = colored["state"].map(
-        lambda s: centroids.get(s, (None, None))[0])
-    colored["lon"] = colored["state"].map(
-        lambda s: centroids.get(s, (None, None))[1])
-    label_df = colored.dropna(subset=["lat", "lon"]).copy()
-    label_df["label"] = label_df.apply(
-        lambda r: f"{r['state']}\n{r['avg_score']:.2f}", axis=1,
-    )
+    selected       = selected_states(state_json)
+    filter_active  = len(selected) > 0
 
     try:
         geojson = load_brazil_geojson()
@@ -925,102 +932,138 @@ def chart_brazil_map(
         st.warning("⚠️ The Brazil map is temporarily unavailable.")
         return
 
-    lo_c = max(0.5, float(colored["avg_score"].min()) - 0.05)
-    hi_c = float(colored["avg_score"].max()) + 0.05
-    if hi_c - lo_c < 0.1:
-        hi_c = lo_c + 0.1
-    ticks = [round(lo_c + (hi_c - lo_c) * i / 4, 2) for i in range(5)]
-
-    has_grey = not greyed.empty
-    if has_grey:
-        range_color = (-1.0, hi_c)
-        a = (lo_c + 1.0) / (hi_c + 1.0)
-        color_scale = [
-            [0.0, PALETTE.slate], [a * 0.999, PALETTE.slate],
-            [a, PALETTE.red],
-            [a + (1 - a) * 0.35, PALETTE.red_light],
-            [a + (1 - a) * 0.65, PALETTE.purple_light],
-            [1.0, PALETTE.purple_dark],
-        ]
-        tickvals = [-1.0, *ticks]
-        ticktext = ["Not selected", *[f"{t:.2f}" for t in ticks]]
-    else:
-        range_color = (lo_c, hi_c)
-        color_scale = [
-            [0.0, PALETTE.red], [0.35, PALETTE.red_light],
-            [0.65, PALETTE.purple_light], [1.0, PALETTE.purple_dark],
-        ]
-        tickvals = ticks
-        ticktext = [f"{t:.2f}" for t in ticks]
-
-    try:
-        fig = px.choropleth(
-            grid, geojson=geojson, locations="state",
-            featureidkey="properties.sigla",
-            color="display_score", color_continuous_scale=color_scale,
-            range_color=range_color, scope="south america",
-            labels={"display_score": "Avg review score",
-                    "state": "State", "orders": "Orders"},
-            hover_name="state", custom_data=["hover"],
-        )
-        fig.update_traces(
-            hovertemplate="<b>%{location}</b><br>%{customdata[0]}<extra></extra>",
-            marker_line_width=1.0, marker_line_color="#FFFFFF",
-        )
-        if not label_df.empty:
-            fig.add_scattergeo(
-                lat=label_df["lat"], lon=label_df["lon"],
-                text=label_df["label"], mode="text",
-                textfont=dict(size=11, color="#1F2937",
-                              family="sans-serif"),
-                hoverinfo="skip", showlegend=False,
-            )
-        fig.update_geos(
-            fitbounds="locations", visible=False,
-            bgcolor="rgba(0,0,0,0)", showcountries=False,
-            showcoastlines=False, showland=False, showlakes=False,
-            projection_type="mercator",
-        )
-        fig.update_layout(
-            title=dict(
-                text=f"Average Review Score — {scope_label(year, state_json)}",
-                x=0.5, xanchor="center",
-                font=dict(size=14, color=PALETTE.purple_dark,
-                          family="sans-serif"),
-            ),
-            margin=dict(l=0, r=0, t=48, b=0),
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            coloraxis_colorbar=dict(
-                title="Avg score",
-                tickfont=dict(color=PALETTE.purple_dark),
-                title_font=dict(color=PALETTE.purple_dark),
-                thickness=14, len=0.7,
-                tickvals=tickvals, ticktext=ticktext,
-            ),
-            font=dict(family="sans-serif", color="#3F3D56"),
-            height=620,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-    except (ValueError, KeyError, TypeError) as exc:
-        _LOGGER.exception("Map render failed: %s", exc)
-        st.warning("⚠️ The map could not be rendered for this selection.")
+    gdf = _geojson_to_gdf(geojson)
+    if gdf.empty:
+        st.warning("⚠️ No state geometries could be parsed.")
         return
 
-    low  = colored.loc[colored["avg_score"].idxmin()]
-    high = colored.loc[colored["avg_score"].max()]
-    if len(colored) == 1:
-        text = f"{low['state']} averages {low['avg_score']:.2f} stars. {mode_note}"
-    else:
-        text = (
-            f"{low['state']} ({low['avg_score']:.2f}) is lowest and "
-            f"{high['state']} ({high['avg_score']:.2f}) highest among the "
-            f"coloured states. {mode_note}"
+    score_by_state = dict(zip(df["state"], df["avg_score"]))
+    orders_by_state = dict(zip(df["state"], df["orders"]))
+
+    # Determine colour scale domain from the states that actually have data
+    scores_in_scope = [
+        score_by_state[s] for s in score_by_state
+        if score_by_state[s] is not None
+    ]
+    if not scores_in_scope:
+        _no_data_notice()
+        return
+
+    lo_c = max(0.5, float(min(scores_in_scope)) - 0.05)
+    hi_c = float(max(scores_in_scope)) + 0.05
+    if hi_c - lo_c < 0.1:
+        hi_c = lo_c + 0.1
+
+    cmap = plt.get_cmap("RdYlGn")
+    norm = mpl.colors.Normalize(vmin=lo_c, vmax=hi_c)
+
+    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_wide,
+                                    CONFIG.map_height))
+    ax.set_axis_off()
+    ax.set_title(
+        f"Average Review Score by State — {scope_label(year, state_json)}",
+        fontsize=13, fontweight="bold", color=PALETTE.purple_dark,
+        pad=14,
+    )
+
+    # First pass: draw all states so the outline of Brazil is complete
+    for _, row in gdf.iterrows():
+        state  = row["state"]
+        geom   = row["geometry"]
+        score  = score_by_state.get(state)
+        in_filter = (not filter_active) or (state in selected)
+
+        if score is not None and in_filter:
+            facecolor = cmap(norm(score))
+        else:
+            facecolor = PALETTE.grey_light
+
+        _plot_geojson_state(ax, geom, facecolor=facecolor)
+
+    # Second pass: label the centroid of every state
+    for _, row in gdf.iterrows():
+        state = row["state"]
+        geom  = row["geometry"]
+        score = score_by_state.get(state)
+        in_filter = (not filter_active) or (state in selected)
+
+        # Compute a rough centroid from the outer ring
+        gtype = geom.get("type")
+        coords = geom.get("coordinates")
+        if not gtype or not coords:
+            continue
+        if gtype == "Polygon":
+            ring = coords[0]
+        elif gtype == "MultiPolygon":
+            ring = max(coords, key=lambda p: len(p[0]))[0]
+        else:
+            continue
+        if not ring:
+            continue
+        cx = sum(pt[0] for pt in ring) / len(ring)
+        cy = sum(pt[1] for pt in ring) / len(ring)
+
+        if score is not None and in_filter:
+            label   = f"{state}\n{score:.2f}"
+            color   = "#1F2937"
+            weight  = "bold"
+        elif score is not None:
+            label   = f"{state}\n{score:.2f}"
+            color   = "#9CA3AF"
+            weight  = "normal"
+        else:
+            label   = state
+            color   = "#9CA3AF"
+            weight  = "normal"
+
+        ax.text(
+            cx, cy, label,
+            ha="center", va="center",
+            fontsize=7.5, color=color, fontweight=weight, zorder=5,
         )
-    _insight(year, state_json, text)
+
+    # Brazil bounds — fixed so the map is always complete
+    ax.set_xlim(-74.0, -34.0)
+    ax.set_ylim(-34.0,  6.0)
+    ax.set_aspect("equal")
+
+    # Horizontal colour bar
+    sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(
+        sm, ax=ax, orientation="horizontal",
+        fraction=0.04, pad=0.04, shrink=0.7,
+    )
+    cbar.set_label("Average review score (1–5)", fontsize=10,
+                   color=PALETTE.purple_dark)
+    cbar.ax.tick_params(labelsize=9)
+
+    st.pyplot(fig, use_container_width=True)
+    plt.close(fig)
+
+    in_scope = [
+        (s, score_by_state[s]) for s in score_by_state
+        if score_by_state[s] is not None
+        and ((not filter_active) or (s in selected))
+    ]
+    if not in_scope:
+        _insight(year, state_json, "No states match the current filter.")
+        return
+    lo_s, lo_v = min(in_scope, key=lambda x: x[1])
+    hi_s, hi_v = max(in_scope, key=lambda x: x[1])
+    mode_note = (
+        "Selected states are coloured; the rest are greyed out."
+        if filter_active else
+        "All 27 states are coloured by their average review score."
+    )
+    _insight(
+        year, state_json,
+        f"{lo_s} ({lo_v:.2f}) is lowest and {hi_s} ({hi_v:.2f}) is "
+        f"highest among states in the current selection. {mode_note}",
+    )
 
 
-# ── Chart 9 · Delivery punctuality pie (PIE)  [NEW] ──────────────────────
+# ── Chart 9 · Delivery punctuality pie ───────────────────────────────────
 
 def chart_punctuality_pie(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -1326,7 +1369,6 @@ def render_overview_tab(
 
     st.divider()
 
-    # Chart 1 + Chart 2 side by side
     col_left, col_right = st.columns([1, 1])
     with col_left:
         chart_review_distribution(conn, year, state_json)
@@ -1335,7 +1377,6 @@ def render_overview_tab(
 
     st.divider()
 
-    # Chart 3 (NEW pie) — centred, restricted width
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         chart_score_pie(conn, year, state_json)
@@ -1368,7 +1409,10 @@ def render_theme_tab(
     with col_c:
         chart_satisfaction_by_delivery_bucket(conn, year, state_json)
     with col_d:
-        chart_brazil_map(conn, year, state_json)
+        st.empty()  # placeholder to keep 2-col rhythm
+
+    st.divider()
+    chart_brazil_map(conn, year, state_json)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1384,7 +1428,6 @@ def render_detail_tab(
     )
     st.markdown("## Detail & Method")
 
-    # Chart 9 (NEW pie) — delivery punctuality share
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
         chart_punctuality_pie(conn, year, state_json)
