@@ -4,29 +4,17 @@ Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
 EVERY chart responds to the sidebar filters (Reporting Year + State).
-The headline, the three supporting facts, the KPI row and every chart
-insight are recomputed from the filtered data, so numbers on screen never
-contradict the charts next to them.
 
 Tabs:
-    📊 Overview               — KPI row + review-score distribution
-    📊 Customer Satisfaction  — monthly trend, state scores, on-time vs late,
-                                punctuality vs satisfaction, delivery
-                                buckets, Brazil map
+    📊 Overview               — KPI row + score distribution + monthly trend
+    📊 Customer Satisfaction  — state scores, on-time vs late, punctuality vs satisfaction,
+                                delivery buckets, Brazil map
     📊 Detail & Method        — limitations + whole-dataset diagnostics
     🎯 Recommendations        — prioritised actions (whole dataset)
-
-Headline (visible above the tabs, on every tab, filter-aware):
-    "Late deliveries cost you X stars. On-time orders average A; late ones
-    average B."   (filters = All → 1.73 stars · 4.294 vs 2.566)
-
-Data tables loaded (4 — the minimum Group 1 requires):
-    orders, customers, order_items, reviews
 
 Reference KPIs (filters = All):
     Total Orders 99,441 · Delivered 96,478 · Avg Review 4.09
     Late 7,826 · Avg Delivery Days 12.56
-    On-time 4.29 · Late 2.57 · Gap 1.73 stars
 
 Run:
     streamlit run olist_app.py
@@ -135,7 +123,7 @@ class Config:
     delivery_bucket_order: Final[tuple[str, ...]] = (
         "0-5 days", "6-10 days", "11-20 days", "21-30 days", "30+ days",
     )
-    min_reviews_per_month: Final[int] = 30   # below this a month is "noisy"
+    min_reviews_per_month: Final[int] = 30
 
 
 CONFIG  = Config()
@@ -210,7 +198,6 @@ def _validate_dataframes(frames: dict[str, pd.DataFrame]) -> None:
     ttl=CONFIG.data_cache_ttl_seconds, show_spinner="Loading Olist data…"
 )
 def build_connection() -> sqlite3.Connection:
-    """Build the shared file-backed SQLite DB from the 4 CSVs."""
     data_dir = _data_dir()
     frames: dict[str, pd.DataFrame] = {}
     for table, filename in CONFIG.tables.items():
@@ -233,10 +220,6 @@ def build_connection() -> sqlite3.Connection:
 
 
 # ── Filter contract ────────────────────────────────────────────────────────
-#
-# Every query that touches orders (alias `o`) and customers (alias `c`)
-# appends FILTER_SQL to its WHERE clause and passes year_multi(...) as its
-# four parameters. One definition → every chart filters identically.
 
 FILTER_SQL: Final[str] = """
           (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
@@ -244,8 +227,6 @@ FILTER_SQL: Final[str] = """
                         (SELECT value FROM json_each(?)))
 """
 
-# Year-only variant (used by the map, which draws non-selected states grey
-# instead of dropping them).
 YEAR_SQL: Final[str] = """
           (? = 'All' OR strftime('%Y', o.order_purchase_timestamp) = ?)
 """
@@ -290,7 +271,6 @@ def selected_states(state_json: str) -> list[str]:
 
 
 def scope_label(year: str, state_json: str) -> str:
-    """Human-readable description of the active filters."""
     years  = "All years" if year == "All" else year
     states = selected_states(state_json)
     return f"{years} · {', '.join(states) if states else 'All states'}"
@@ -330,18 +310,16 @@ def fmt_float(value: Any, places: int = 2) -> str:
 
 
 def fmt_pct(value: Any, places: int = 1) -> str:
-    """Format a fraction (0.081) as '8.1%'."""
     return "—" if value is None else f"{100 * value:.{places}f}%"
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §4  KPI + HEADLINE COMPUTATION  (all filter-aware)
+# §4  KPI COMPUTATION
 # ════════════════════════════════════════════════════════════════════════════
 
 def query_kpis(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> dict[str, Any]:
-    """Q1 — headline KPIs. Filters = All reproduces the README table."""
     params = year_multi(year, state_json)
 
     df = safe_query(conn, f"""
@@ -379,10 +357,10 @@ def query_kpis(
     }
 
 
-def query_headline(
+def query_punctuality_split(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> dict[str, Any]:
-    """Headline story + three supporting facts for the current selection."""
+    """On-time vs late split for the small interpretation note (Detail tab)."""
     params = year_multi(year, state_json)
 
     split = safe_query(conn, f"""
@@ -398,60 +376,20 @@ def query_headline(
         JOIN customers c ON o.customer_id = c.customer_id
         JOIN reviews r  ON o.order_id  = r.order_id
         WHERE {DELIVERED_SQL} AND {FILTER_SQL}
-    """, params=params, label="headline split")
-
-    lateness = safe_query(conn, f"""
-        SELECT COUNT(DISTINCT o.order_id) AS delivered,
-               SUM(CASE WHEN o.order_delivered_customer_date
-                             > o.order_estimated_delivery_date
-                        THEN 1 ELSE 0 END) AS late_orders,
-               ROUND(AVG(CASE WHEN o.order_delivered_customer_date
-                                   > o.order_estimated_delivery_date
-                              THEN julianday(o.order_delivered_customer_date)
-                                 - julianday(o.order_estimated_delivery_date)
-                              END), 2) AS avg_days_late,
-               ROUND(MAX(CASE WHEN o.order_delivered_customer_date
-                                   > o.order_estimated_delivery_date
-                              THEN julianday(o.order_delivered_customer_date)
-                                 - julianday(o.order_estimated_delivery_date)
-                              END), 0) AS worst_days_late
-        FROM orders o
-        JOIN customers c ON o.customer_id = c.customer_id
-        WHERE {DELIVERED_SQL} AND {FILTER_SQL}
-    """, params=params, label="headline lateness")
-
-    fanout = safe_query(conn, f"""
-        SELECT COUNT(*) AS review_rows,
-               COUNT(DISTINCT r.order_id) AS distinct_orders
-        FROM reviews r
-        JOIN orders o    ON r.order_id = o.order_id
-        JOIN customers c ON o.customer_id = c.customer_id
-        WHERE {FILTER_SQL}
-    """, params=params, label="headline fan-out")
+    """, params=params, label="punctuality split")
 
     on_time = safe_scalar(split, "on_time_avg")
     late    = safe_scalar(split, "late_avg")
-    delivered   = safe_scalar(lateness, "delivered", 0)
-    late_orders = safe_scalar(lateness, "late_orders", 0)
+    gap     = (
+        on_time - late
+        if on_time is not None and late is not None else None
+    )
 
-    return {
-        "on_time_avg":     on_time,
-        "late_avg":        late,
-        "gap":             (on_time - late)
-                           if on_time is not None and late is not None
-                           else None,
-        "delivered":       delivered,
-        "late_orders":     late_orders,
-        "late_share":      (late_orders / delivered) if delivered else None,
-        "avg_days_late":   safe_scalar(lateness, "avg_days_late"),
-        "worst_days_late": safe_scalar(lateness, "worst_days_late"),
-        "review_rows":     safe_scalar(fanout, "review_rows", 0),
-        "distinct_orders": safe_scalar(fanout, "distinct_orders", 0),
-    }
+    return {"on_time_avg": on_time, "late_avg": late, "gap": gap}
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §5  CHART FUNCTIONS  (each chart appears exactly once — all filtered)
+# §5  CHART FUNCTIONS
 # ════════════════════════════════════════════════════════════════════════════
 
 def _no_data_notice(msg: str = "No data for the current filters.") -> None:
@@ -465,7 +403,7 @@ def _insight(year: str, state_json: str, text: str) -> None:
     )
 
 
-# ── Review score distribution (Q2 · Overview) ─────────────────────────────
+# ── Review score distribution ─────────────────────────────────────────────
 
 def chart_review_distribution(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -523,7 +461,7 @@ def chart_review_distribution(
     )
 
 
-# ── Monthly average score (Q3) ────────────────────────────────────────────
+# ── Monthly average score ─────────────────────────────────────────────────
 
 def chart_monthly_score(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -596,14 +534,12 @@ def chart_monthly_score(
     )
 
 
-# ── Average review score by state (Q4 · horizontal bar) ───────────────────
+# ── Average review score by state (horizontal bar) ────────────────────────
 
 def chart_state_scores(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        "### Average Review Score by State *(top 10 by orders)*"
-    )
+    st.markdown("### Average Review Score by State *(top 10)*")
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
@@ -651,14 +587,12 @@ def chart_state_scores(
     _insight(year, state_json, text)
 
 
-# ── On-time vs late by state (Q5 · grouped bar) ───────────────────────────
+# ── On-time vs late by state (grouped bar) ────────────────────────────────
 
 def chart_ontime_by_state(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        "### On-Time vs Late Deliveries by State *(top 5)*"
-    )
+    st.markdown("### On-Time vs Late Deliveries by State *(top 5)*")
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS delivered,
@@ -720,7 +654,7 @@ def chart_ontime_by_state(
     _insight(year, state_json, text)
 
 
-# ── Punctuality vs satisfaction (Q6 · advanced feature) ───────────────────
+# ── Punctuality vs satisfaction (advanced feature · Q6) ───────────────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -786,7 +720,7 @@ def chart_punctuality_vs_satisfaction(
     _insight(year, state_json, text)
 
 
-# ── Delivery buckets (Q9 · bonus) ─────────────────────────────────────────
+# ── Delivery buckets (bonus · Q9) ─────────────────────────────────────────
 
 def chart_satisfaction_by_delivery_bucket(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -829,8 +763,6 @@ def chart_satisfaction_by_delivery_bucket(
         _no_data_notice()
         return
 
-    # Reference line = the average of the CURRENT selection, not a
-    # whole-dataset constant.
     selection_avg = float(
         (df["avg_score"] * df["review_rows"]).sum() / df["review_rows"].sum()
     )
@@ -887,7 +819,7 @@ def chart_satisfaction_by_delivery_bucket(
     _insight(year, state_json, text)
 
 
-# ── Brazil map (Q4 · bonus) ───────────────────────────────────────────────
+# ── Brazil map ────────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
@@ -984,8 +916,6 @@ def chart_brazil_map(
         st.warning("⚠️ The Brazil map is temporarily unavailable.")
         return
 
-    # Colour range is derived from the data on screen, so contrast stays
-    # readable whichever states / year are selected.
     lo_c = max(0.5, float(colored["avg_score"].min()) - 0.05)
     hi_c = float(colored["avg_score"].max()) + 0.05
     if hi_c - lo_c < 0.1:
@@ -1115,6 +1045,14 @@ def info_card(
     )
 
 
+def _status_header(year: str, state_json: str) -> None:
+    """Small pill showing the active scope — replaces the big headline block."""
+    st.markdown(
+        f'<span class="scope-pill">Scope: {scope_label(year, state_json)}</span>',
+        unsafe_allow_html=True,
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # §7  PRESENTATION LAYER
 # ════════════════════════════════════════════════════════════════════════════
@@ -1220,26 +1158,6 @@ GLOBAL_CSS: Final[str] = """
     padding: 3px 12px; font-size: 12px; font-weight: 700;
     margin-bottom: 6px;
   }
-
-  .headline-block {
-    background: linear-gradient(120deg, #FBF8FF 0%, #F2ECFB 60%, #EFE9F7 100%);
-    border: 1px solid #E5DEF7; border-left: 5px solid #8B5CF6;
-    border-radius: 12px; padding: 22px 26px; margin: 12px 0 8px 0;
-    box-shadow: 0 4px 16px rgba(109, 63, 181, 0.10);
-    line-height: 1.75;
-  }
-  .headline-block p { margin: 0 0 10px 0; font-size: 16px; color: #3F3D56; }
-  .headline-block p:last-child { margin-bottom: 0; }
-  .headline-block .big {
-    font-size: 22px; font-weight: 700; color: #3F3D56;
-  }
-  .headline-block .star {
-    color: #D64545; font-size: 26px; font-weight: 800;
-  }
-  .headline-block .hl { color: #6D3FB5; font-weight: 700; }
-  .headline-block .takeaway {
-    color: #4C1D95; font-style: italic; font-weight: 600;
-  }
 </style>
 """
 
@@ -1278,7 +1196,7 @@ def _apply_global_style() -> None:
 def render_sidebar() -> tuple[str, list[str]]:
     st.sidebar.title("📊 Filters")
     st.sidebar.markdown(
-        "Both filters apply to **every KPI, headline figure and chart**. "
+        "Both filters apply to **every KPI and chart**. "
         "Set both to *All* to reproduce the reference values."
     )
 
@@ -1316,99 +1234,21 @@ def render_sidebar() -> tuple[str, list[str]]:
     return year, states
 
 
-def render_headline_story(
-    conn: sqlite3.Connection, year: str, state_json: str
-) -> None:
-    """Headline + three supporting facts, recomputed for the selection."""
-    h = query_headline(conn, year, state_json)
-
-    gap_txt = "—" if h["gap"] is None else f"{h['gap']:.2f} stars"
-    if h["gap"] is None:
-        takeaway = (
-            "The selection does not contain both on-time and late "
-            "reviewed orders, so the gap cannot be computed. Widen the "
-            "filters to see it."
-        )
-    else:
-        takeaway = (
-            "Late delivery is the strongest satisfaction driver in the "
-            "full dataset, and the insight your presentation should be "
-            "built around."
-        )
-
-    st.markdown(
-        f'<span class="scope-pill">Selection: '
-        f'{scope_label(year, state_json)}</span>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"""
-        <div class="headline-block">
-          <p class="big">
-            Late deliveries cost you <span class="star">{gap_txt}</span>.
-          </p>
-          <p>
-            On-time orders average
-            <span class="hl">{fmt_float(h['on_time_avg'], 3)}</span>;
-            late ones average
-            <span class="hl">{fmt_float(h['late_avg'], 3)}</span>.
-          </p>
-          <p class="takeaway">{takeaway}</p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    fact_cols = st.columns(3)
-    fact_cols[0].metric(
-        "Late deliveries",
-        fmt_int(h["late_orders"]),
-        delta=f"{fmt_pct(h['late_share'])} of delivered orders",
-        delta_color="inverse",
-    )
-    worst = h["worst_days_late"]
-    fact_cols[1].metric(
-        "Avg days past estimate (when late)",
-        f"{fmt_float(h['avg_days_late'])} d",
-        delta=f"worst case {fmt_int(worst)} d" if worst is not None else None,
-        delta_color="inverse",
-    )
-    fan_out = int(h["review_rows"]) - int(h["distinct_orders"])
-    fact_cols[2].metric(
-        "Reviews fan-out",
-        f"{fmt_int(h['review_rows'])} rows",
-        delta=f"{fmt_int(h['distinct_orders'])} distinct orders",
-        delta_color="off",
-    )
-    st.caption(
-        "Reviews are a fan-out table — use `COUNT(DISTINCT order_id)` "
-        f"across any join, or order counts will be wrong by {fan_out:,} "
-        "rows in this selection. **Q9 (delivery-time buckets)** shows "
-        "the score decline more smoothly than the binary on-time/late "
-        "split: use both — the split for the headline, the buckets for "
-        "the nuance."
-    )
-
-
 # ════════════════════════════════════════════════════════════════════════════
-# 📊 DATA ANALYSIS DASHBOARD  — Tabs 1–3
+# TAB 1 — OVERVIEW
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_overview_tab(
     conn: sqlite3.Connection, year: str, state_json: str,
     filter_active: bool,
 ) -> None:
-    """Overview — KPI row + review-score distribution."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Overview")
-    st.markdown(
-        "Five headline KPIs plus the review-score distribution — both "
-        "respond to the **Year** and **State** filters."
-    )
 
+    # ── KPI strip ─────────────────────────────────────────────────────
     k = query_kpis(conn, year, state_json)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
@@ -1442,52 +1282,84 @@ def render_overview_tab(
         )
 
     st.divider()
-    chart_review_distribution(conn, year, state_json)
 
+    # ── Chart 1 + Chart 2 side by side (matches the reference layout) ─
+    col_left, col_right = st.columns([1, 1])
+    with col_left:
+        chart_review_distribution(conn, year, state_json)
+    with col_right:
+        chart_monthly_score(conn, year, state_json)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 2 — CUSTOMER SATISFACTION
+# ════════════════════════════════════════════════════════════════════════════
 
 def render_theme_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Customer Satisfaction — every chart filtered, each exactly once."""
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Customer Satisfaction")
-    st.markdown(
-        "Every chart responds to the **Year** and **State** filters, and "
-        "every insight line is recomputed from the selection. Each chart "
-        "appears exactly once across the whole dashboard."
-    )
+
+    # ── Charts 3 & 4 side by side ─────────────────────────────────────
+    col_a, col_b = st.columns([1, 1])
+    with col_a:
+        chart_state_scores(conn, year, state_json)
+    with col_b:
+        chart_ontime_by_state(conn, year, state_json)
 
     st.divider()
-    chart_monthly_score(conn, year, state_json)
-    st.divider()
-    chart_state_scores(conn, year, state_json)
-    st.divider()
-    chart_ontime_by_state(conn, year, state_json)
-    st.divider()
+
+    # ── Chart 5 (advanced feature) — full width ───────────────────────
     chart_punctuality_vs_satisfaction(conn, year, state_json)
+
     st.divider()
-    chart_satisfaction_by_delivery_bucket(conn, year, state_json)
-    st.divider()
-    chart_brazil_map(conn, year, state_json)
+
+    # ── Charts 6 & 7 side by side ─────────────────────────────────────
+    col_c, col_d = st.columns([1, 1])
+    with col_c:
+        chart_satisfaction_by_delivery_bucket(conn, year, state_json)
+    with col_d:
+        chart_brazil_map(conn, year, state_json)
 
 
-def render_detail_tab(conn: sqlite3.Connection) -> None:
-    """Detail & Method — limitations + diagnostics (no charts)."""
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 3 — DETAIL & METHOD
+# ════════════════════════════════════════════════════════════════════════════
+
+def render_detail_tab(
+    conn: sqlite3.Connection, year: str, state_json: str
+) -> None:
     st.markdown(
         '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Detail & Method")
-    st.markdown(
-        "The data-limitation note required by the brief, plus "
-        "**whole-dataset** diagnostics behind the reference numbers. "
-        "These tables are data-quality checks, not charts, so they "
-        "deliberately ignore the filters."
-    )
 
+    # ── Interpretation note (single, compact, in context) ─────────────
+    split = query_punctuality_split(conn, year, state_json)
+    if split["gap"] is not None:
+        info_card(
+            "The headline interpretation",
+            f"""<p>
+            Late deliveries cost
+            <b style="color:#D64545; font-size:20px;">
+                {split['gap']:.2f} stars
+            </b>.
+            On-time orders average <b>{fmt_float(split['on_time_avg'], 3)}</b>;
+            late ones <b>{fmt_float(split['late_avg'], 3)}</b>.
+            Use the binary split for the headline; the delivery-time buckets
+            (Chart 6) show the same decline more smoothly for nuance.
+            </p>""",
+            variant="info", tags=["Headline", "Interpretation"],
+        )
+
+    st.divider()
+
+    # ── Data limitations ──────────────────────────────────────────────
     st.markdown("### Data limitations")
 
     info_card(
@@ -1609,46 +1481,20 @@ def render_detail_tab(conn: sqlite3.Connection) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# 🎯 DECISION DASHBOARD  — Tab 4
+# TAB 4 — RECOMMENDATIONS
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations_tab() -> None:
-    """Recommendations — supporting facts recap + prioritised actions."""
     st.markdown(
         '<span class="mode-badge mode-decision">🎯 Decision</span>',
         unsafe_allow_html=True,
     )
     st.markdown("## Recommendations")
     st.markdown(
-        "The prioritised recommendations that follow from the headline "
-        "finding. They are based on the **whole dataset**, so they do "
-        "not change when the sidebar filters move — a decision should "
-        "not flip because someone narrowed the view."
-    )
-
-    st.markdown("### Three supporting facts (recap, whole dataset)")
-    st.markdown(
-        """
-        <div class="info-card">
-          <ol style="margin-bottom:0; color:#3F3D56; line-height:1.9;">
-            <li><b>7,826 delivered orders (8.1%)</b> arrived after their
-                estimated delivery date.</li>
-            <li>When late, orders average <b>9.55 days past the
-                estimate</b>.</li>
-            <li>Reviews are a fan-out table — <b>99,224 rows for
-                98,673 orders</b>. Use <code>COUNT(DISTINCT order_id)</code>
-                or your order counts will be wrong.</li>
-          </ol>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    st.info(
-        "**Split for the headline, buckets for the nuance.** The binary "
-        "on-time/late split (4.294 vs 2.566) is the headline. The "
-        "delivery-time buckets (4.45 → 4.36 → 4.22 → 3.69 → 2.26) show "
-        "the decline more smoothly. Use both."
+        "Prioritised actions following from the headline finding. "
+        "They are based on the **whole dataset**, so they do not change "
+        "when the sidebar filters move — a decision should not flip "
+        "because someone narrowed the view."
     )
 
     st.divider()
@@ -1736,13 +1582,13 @@ def main() -> None:
     state_json    = safe_state_json(states)
     filter_active = year != "All" or "All" not in states
 
-    # ── Title + headline (headline visible on every tab) ──────────────
+    # ── Compact title + scope pill (headline block removed) ───────────
     st.markdown(
         """
         <h1 style="
             background: linear-gradient(90deg, #6D3FB5 0%, #8B5CF6 50%, #D64545 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text; font-size: 42px; font-weight: 800;
+            background-clip: text; font-size: 40px; font-weight: 800;
             letter-spacing: -0.02em; text-align: center;
             margin-bottom: 0; padding-bottom: 0;">
           Customer Satisfaction Dashboard
@@ -1754,7 +1600,7 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-    render_headline_story(conn, year, state_json)
+    _status_header(year, state_json)
 
     # ── Four tabs ─────────────────────────────────────────────────────
     (
@@ -1774,7 +1620,7 @@ def main() -> None:
     with tab_theme:
         render_theme_tab(conn, year, state_json)
     with tab_detail:
-        render_detail_tab(conn)
+        render_detail_tab(conn, year, state_json)
     with tab_recommendations:
         render_recommendations_tab()
 
@@ -1782,9 +1628,9 @@ def main() -> None:
     st.caption(
         "**Reference (filters = All):** Total Orders 99,441 · Delivered "
         "96,478 · Avg Review 4.09 · Late 7,826 · Avg Delivery Days 12.56. "
-        "Every KPI, headline figure, chart and insight line responds to "
-        "the Year and State filters and reconciles to the verified README "
-        "tables when both are set to All."
+        "Every KPI, chart and insight line responds to the Year and State "
+        "filters and reconciles to the verified README tables when both "
+        "are set to All."
     )
 
 
