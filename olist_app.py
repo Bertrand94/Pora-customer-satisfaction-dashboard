@@ -499,7 +499,7 @@ def chart_monthly_score(
 def chart_review_volume_by_year(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Review Volume Share by Year *(pie)*")
+    st.markdown("### Review Volume Share by Year")
     df = safe_query(conn, f"""
         SELECT strftime('%Y', o.order_purchase_timestamp) AS year,
                COUNT(*) AS reviews
