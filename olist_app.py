@@ -3,7 +3,8 @@
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
-EVERY chart responds to the sidebar filters (Reporting Year + State).
+Decision-making dashboard for customer satisfaction.
+Every chart responds to the sidebar filters (Reporting Year + State).
 
 Tabs:
     Overview               — KPI row · Review score distribution + Review
@@ -24,7 +25,6 @@ Run:
 
 Environment:
     OLIST_DATA_DIR   folder holding the 4 CSVs (default ./data)
-    OLIST_DB_PATH    optional explicit SQLite path
     OLIST_LOG_LEVEL  logging level (default INFO)
 """
 
@@ -49,28 +49,29 @@ from matplotlib.ticker import FuncFormatter
 # §1  CONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-# One size for every chart so the grid is visually uniform.
 CHART_FIGSIZE: Final[tuple[float, float]] = (7.5, 4.5)
 
 
 @dataclass(frozen=True)
 class Palette:
-    # Power BI inspired vibrant palette
-    blue:         str = "#0078D7"
-    blue_light:   str = "#50B4F2"
-    teal:         str = "#00B7C3"
-    green:        str = "#107C10"
-    green_light:  str = "#52D052"
-    orange:       str = "#FF8C00"
-    orange_light: str = "#FFB347"
-    red:          str = "#D13438"
-    red_light:    str = "#F1707A"
-    purple:       str = "#8764B8"
-    purple_light: str = "#B4A0D3"
-    yellow:       str = "#FFB900"
-    grey:         str = "#605E5C"
-    grey_light:   str = "#EDEBE9"
-    slate:        str = "#323130"
+    """Modern, accessible palette tuned for decision dashboards."""
+    blue:         str = "#2563EB"
+    blue_light:   str = "#60A5FA"
+    teal:         str = "#0D9488"
+    green:        str = "#10B981"
+    green_light:  str = "#6EE7B7"
+    orange:       str = "#F59E0B"
+    orange_light: str = "#FCD34D"
+    red:          str = "#EF4444"
+    red_light:    str = "#FCA5A5"
+    purple:       str = "#8B5CF6"
+    purple_light: str = "#C4B5FD"
+    yellow:       str = "#EAB308"
+    grey:         str = "#64748B"
+    grey_light:   str = "#E2E8F0"
+    slate:        str = "#1E293B"
+    text:         str = "#334155"
+    muted:        str = "#94A3B8"
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,10 @@ class Config:
     )
     years: Final[tuple[str, ...]] = ("All", "2016", "2017", "2018")
 
+    geojson_local_path: Final[str] = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data", "brazil-states.geojson",
+    )
     geojson_urls: Final[tuple[str, ...]] = (
         "https://raw.githubusercontent.com/codeforamerica/"
         "click_that_hood/master/public/data/brazil-states.geojson",
@@ -161,15 +166,6 @@ def _data_dir() -> str:
     return os.environ.get("OLIST_DATA_DIR", os.path.join(_HERE, "data"))
 
 
-def _resolve_db_path() -> str:
-    custom = os.environ.get("OLIST_DB_PATH")
-    if custom:
-        return custom
-    if os.path.isdir("/content"):
-        return "/content/olist.db"
-    return os.path.join(_HERE, "olist.db")
-
-
 def _validate_dataframes(frames: dict[str, pd.DataFrame]) -> None:
     for table, required in CONFIG.required_columns.items():
         if table not in frames:
@@ -192,6 +188,12 @@ def _validate_dataframes(frames: dict[str, pd.DataFrame]) -> None:
     ttl=CONFIG.data_cache_ttl_seconds, show_spinner="Loading Olist data…"
 )
 def build_connection() -> sqlite3.Connection:
+    """
+    Load CSVs into an in-memory SQLite database.
+
+    Cloud-safe: never writes to disk, so Streamlit Community Cloud's
+    ephemeral filesystem cannot break the app.
+    """
     data_dir = _data_dir()
     frames: dict[str, pd.DataFrame] = {}
     for table, filename in CONFIG.tables.items():
@@ -205,11 +207,11 @@ def build_connection() -> sqlite3.Connection:
 
     _validate_dataframes(frames)
 
-    db_path = _resolve_db_path()
-    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     for table, df in frames.items():
         df.to_sql(table, conn, if_exists="replace", index=False)
-    _LOGGER.info("Database built at %s", db_path)
+
+    _LOGGER.info("In-memory database built with %d tables", len(frames))
     return conn
 
 
@@ -303,10 +305,6 @@ def fmt_float(value: Any, places: int = 2) -> str:
     return "—" if value is None else f"{value:.{places}f}"
 
 
-def fmt_pct(value: Any, places: int = 1) -> str:
-    return "—" if value is None else f"{100 * value:.{places}f}%"
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # §4  KPI COMPUTATION
 # ════════════════════════════════════════════════════════════════════════════
@@ -359,11 +357,31 @@ def _no_data_notice(msg: str = "No data for the current filters.") -> None:
     st.info(f"ℹ️ {msg} Try widening the Year or State filters.")
 
 
-def _insight(year: str, state_json: str, text: str) -> None:
-    st.caption(
-        f"**Selection:** {scope_label(year, state_json)}  ·  "
-        f"**Insight.** {text}"
-    )
+def _insight(
+    year: str,
+    state_json: str,
+    text: str,
+    *,
+    level: str = "info",
+) -> None:
+    """
+    Render an actionable insight under a chart.
+
+    level:
+        "info"    — neutral context
+        "success" — positive finding
+        "warning" — problem worth attention
+        "error"   — urgent / highest priority
+    """
+    scope = scope_label(year, state_json)
+    md = f"**Selection:** {scope}  \n**Insight.** {text}"
+    renderer = {
+        "info": st.info,
+        "success": st.success,
+        "warning": st.warning,
+        "error": st.error,
+    }.get(level, st.info)
+    renderer(md)
 
 
 # ── Review score distribution (bar) ──────────────────────────────────────
@@ -389,7 +407,6 @@ def chart_review_distribution(
     total = int(df["reviews"].sum())
     df["pct"] = 100.0 * df["reviews"] / total
 
-    # Colour map reused by the pie chart so the two charts share a palette.
     shades = [
         PALETTE.green  if s == 5
         else PALETTE.red   if s == 1
@@ -407,7 +424,7 @@ def chart_review_distribution(
     for bar, pct in zip(bars, df["pct"]):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{pct:.1f}%", ha="center", va="bottom", fontsize=10,
-                color=PALETTE.slate, fontweight="bold")
+                color=PALETTE.text, fontweight="bold")
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -416,10 +433,14 @@ def chart_review_distribution(
         row = df.loc[df["score"] == score, "pct"]
         return float(row.iloc[0]) if not row.empty else 0.0
 
+    low_share = share(1) + share(2)
+    level = "warning" if low_share > 15 else "info"
     _insight(
         year, state_json,
         f"{share(5):.1f}% of the {total:,} reviews are 5★ and "
-        f"{share(1):.1f}% are 1★.",
+        f"{share(1):.1f}% are 1★. Low scores (1–2★) make up "
+        f"{low_share:.1f}% of reviews.",
+        level=level,
     )
 
 
@@ -517,7 +538,6 @@ def chart_review_volume_by_year(
     total = int(df["reviews"].sum())
     df = df.sort_values("year").reset_index(drop=True)
 
-    # Matching the vibrant palette of the distribution chart
     year_palette = [PALETTE.blue_light, PALETTE.blue, PALETTE.teal, PALETTE.green]
     colors = [year_palette[i % len(year_palette)] for i in range(len(df))]
 
@@ -532,9 +552,10 @@ def chart_review_volume_by_year(
         startangle=140,
         colors=colors,
         explode=[0.06 if i == len(df) - 1 else 0 for i in range(len(df))],
-        textprops={"fontsize": 11, "fontweight": "bold"},
+        textprops={"fontsize": 11, "fontweight": "bold",
+                   "color": PALETTE.text},
     )
-    ax.set_title("Review Volume Share by Year", fontsize=13, fontweight="bold", pad=15)
+    ax.set_title("Review Volume Share by Year", pad=15)
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -582,7 +603,7 @@ def chart_state_scores(
         ax.text(score + 0.03, bar.get_y() + bar.get_height() / 2,
                 f"{score:.2f}  (n={n:,})",
                 va="center", fontsize=9,
-                color=PALETTE.slate, fontweight="bold")
+                color=PALETTE.text, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -590,13 +611,16 @@ def chart_state_scores(
     high = plot_df.iloc[-1]
     if len(plot_df) == 1:
         text = f"{low['state']} averages {low['avg_score']:.2f} stars."
+        level = "info"
     else:
+        spread = high["avg_score"] - low["avg_score"]
         text = (
             f"{low['state']} ({low['avg_score']:.2f}) anchors the low "
             f"end; {high['state']} ({high['avg_score']:.2f}) the high end "
-            f"— a spread of {high['avg_score'] - low['avg_score']:.2f} stars."
+            f"— a spread of {spread:.2f} stars."
         )
-    _insight(year, state_json, text)
+        level = "warning" if low["avg_score"] < 4.0 else "info"
+    _insight(year, state_json, text, level=level)
 
 
 # ── On-time vs late by state (grouped bar) ──────────────────────────────
@@ -653,6 +677,7 @@ def chart_ontime_by_state(
             f"{int(worst['delivered']):,} delivered orders were late "
             f"({worst['late_rate']:.1f}%)."
         )
+        level = "warning" if worst["late_rate"] > overall * 1.5 else "info"
     else:
         text = (
             f"Across the states shown, {overall:.1f}% of delivered orders "
@@ -660,7 +685,8 @@ def chart_ontime_by_state(
             f"({worst['late_rate']:.1f}%), {best['state']} lowest "
             f"({best['late_rate']:.1f}%)."
         )
-    _insight(year, state_json, text)
+        level = "warning" if worst["late_rate"] > overall * 1.5 else "info"
+    _insight(year, state_json, text, level=level)
 
 
 # ── Punctuality vs satisfaction ─────────────────────────────────────────
@@ -705,7 +731,7 @@ def chart_punctuality_vs_satisfaction(
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,}; {days}d avg)",
                 ha="center", va="bottom", fontsize=10,
-                color=PALETTE.slate, fontweight="bold")
+                color=PALETTE.text, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -714,15 +740,18 @@ def chart_punctuality_vs_satisfaction(
         gap = scores["On Time"] - scores["Late"]
         text = (
             f"Late deliveries cost **{gap:.2f} stars** — "
-            f"{scores['On Time']:.2f} on time vs {scores['Late']:.2f} late."
+            f"{scores['On Time']:.2f} on time vs {scores['Late']:.2f} late. "
+            f"Reducing lateness is the highest-leverage intervention."
         )
+        level = "error" if gap >= 1.5 else "warning"
     else:
         only = next(iter(scores))
         text = (
             f"Only {only.lower()} orders exist in this selection, so no "
             "on-time vs late gap can be computed."
         )
-    _insight(year, state_json, text)
+        level = "info"
+    _insight(year, state_json, text, level=level)
 
 
 # ── Delivery buckets ────────────────────────────────────────────────────
@@ -792,7 +821,7 @@ def chart_satisfaction_by_delivery_bucket(
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,})",
                 ha="center", va="bottom", fontsize=9,
-                color=PALETTE.slate, fontweight="bold")
+                color=PALETTE.text, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -802,6 +831,7 @@ def chart_satisfaction_by_delivery_bucket(
             f"{df.iloc[0]['delivery_bucket']} bucket "
             f"({df.iloc[0]['avg_score']:.2f} stars)."
         )
+        level = "info"
     else:
         first, last = df.iloc[0], df.iloc[-1]
         below = df.loc[df["avg_score"] < selection_avg, "delivery_bucket"]
@@ -811,18 +841,30 @@ def chart_satisfaction_by_delivery_bucket(
             if not below.empty else
             "No bucket falls below the selection average."
         )
+        step = float(df.iloc[2]["avg_score"] - df.iloc[3]["avg_score"]) \
+            if len(df) >= 4 else 0.0
         text = (
             f"Scores run from {first['avg_score']:.2f} "
             f"({first['delivery_bucket']}) to {last['avg_score']:.2f} "
             f"({last['delivery_bucket']}). {below_txt}"
         )
-    _insight(year, state_json, text)
+        level = "warning" if last["avg_score"] < 3.0 else "info"
+    _insight(year, state_json, text, level=level)
 
 
 # ── Brazil map · Delivered Orders (complete) ────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
+    # Try local file first (fastest, no network)
+    if os.path.isfile(CONFIG.geojson_local_path):
+        try:
+            with open(CONFIG.geojson_local_path, encoding="utf-8") as fh:
+                return json.load(fh)
+        except (OSError, ValueError) as exc:
+            _LOGGER.warning("Local GeoJSON failed: %s", exc)
+
+    # Fall back to remote mirrors
     last_err: Exception | None = None
     for url in CONFIG.geojson_urls:
         try:
@@ -834,7 +876,7 @@ def load_brazil_geojson() -> dict[str, Any]:
         except (requests.RequestException, ValueError) as exc:
             _LOGGER.warning("GeoJSON mirror failed: %s — %s", url, exc)
             last_err = exc
-    raise RuntimeError(f"All GeoJSON mirrors failed. Last error: {last_err}")
+    raise RuntimeError(f"All GeoJSON sources failed. Last error: {last_err}")
 
 
 def _geojson_to_gdf(geojson: dict[str, Any]) -> pd.DataFrame:
@@ -893,9 +935,6 @@ def _plot_geojson_state(
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart · Brazil Map · Delivered Orders — all 27 states
-    are always rendered. States not in the current filter are shown in
-    light grey but remain visible."""
     st.markdown("### Brazil Map · Delivered Orders")
 
     df = safe_query(conn, f"""
@@ -918,7 +957,11 @@ def chart_brazil_map(
         geojson = load_brazil_geojson()
     except RuntimeError as exc:
         _LOGGER.error("GeoJSON unavailable: %s", exc)
-        st.warning("⚠️ The Brazil map is temporarily unavailable.")
+        st.warning(
+            "⚠️ The Brazil map is temporarily unavailable. "
+            "Add `data/brazil-states.geojson` to the repo, or "
+            "verify internet access."
+        )
         return
 
     gdf = _geojson_to_gdf(geojson)
@@ -941,7 +984,6 @@ def chart_brazil_map(
     if hi_c - lo_c < 1:
         hi_c = lo_c + 1
 
-    # Classic Power BI style warm-to-cool mapping for density
     cmap = plt.get_cmap("YlGnBu")
     norm = mpl.colors.Normalize(vmin=lo_c, vmax=hi_c)
 
@@ -949,7 +991,7 @@ def chart_brazil_map(
     ax.set_axis_off()
     ax.set_title(
         f"Delivered Orders by State — {scope_label(year, state_json)}",
-        fontsize=12, fontweight="bold", color=PALETTE.slate, pad=12,
+        fontsize=12, fontweight="bold", color=PALETTE.text, pad=12,
     )
 
     for _, row in gdf.iterrows():
@@ -1015,7 +1057,7 @@ def chart_brazil_map(
         sm, ax=ax, orientation="horizontal",
         fraction=0.04, pad=0.04, shrink=0.7,
     )
-    cbar.set_label("Delivered orders", fontsize=9, color=PALETTE.slate)
+    cbar.set_label("Delivered orders", fontsize=9, color=PALETTE.text)
     cbar.ax.tick_params(labelsize=8)
 
     st.pyplot(fig, use_container_width=True)
@@ -1058,7 +1100,7 @@ def info_card(
     tags_html = ""
     if tags:
         pills = "".join(f'<span class="tag">{t}</span>' for t in tags)
-        tags_html = f"<div style='margin-bottom:10px;'>{pills}</div>"
+        tags_html = f"<div class='tag-row'>{pills}</div>"
 
     st.markdown(
         f"""
@@ -1078,103 +1120,142 @@ def info_card(
 
 GLOBAL_CSS: Final[str] = """
 <style>
-  /* Power BI inspired vibrant background */
-  .stApp { 
-    background: linear-gradient(135deg, #F3F2F1 0%, #E1DFDD 100%);
-    color: #323130;
+  /* Minimal, purposeful CSS — Streamlit theme handles colors and fonts.
+     This only refines rhythm (spacing), card structure, and tag styling. */
+
+  /* Main container: cap width and add breathing room */
+  .block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 3rem !important;
+    max-width: 1400px;
   }
 
-  /* Sidebar styling */
-  section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0078D7 0%, #005A9E 100%);
-    border-right: 2px solid #005A9E;
+  /* Typography — use the theme's font, only adjust rhythm */
+  h1, h2, h3, h4 {
+    letter-spacing: -0.01em;
+    line-height: 1.25;
   }
-  section[data-testid="stSidebar"] * { color: #FFFFFF !important; }
-  section[data-testid="stSidebar"] h1,
-  section[data-testid="stSidebar"] h2,
-  section[data-testid="stSidebar"] h3 {
-    color: #FFFFFF !important; font-weight: 700;
-  }
-  section[data-testid="stSidebar"] .stSelectbox label,
-  section[data-testid="stSidebar"] .stMultiSelect label {
-    color: #E1DFDD !important; font-weight: 600;
-    text-transform: uppercase; font-size: 12px; letter-spacing: 0.06em;
-  }
-  section[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.2) !important;
+  h1 { margin-bottom: 0.25rem !important; }
+  h2 { margin-top: 1.5rem !important; margin-bottom: 0.75rem !important; }
+  h3 {
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    margin-top: 1rem !important;
+    margin-bottom: 0.5rem !important;
+    color: #1E293B;
   }
 
-  /* Typography */
-  h2, h3 { color: #323130; letter-spacing: -0.01em; font-weight: 700; }
-  p, li, span, label { color: #323130; }
-  .stCaption, [data-testid="stCaptionContainer"] { color: #605E5C; }
-
-  /* Metric Cards - Classic Power BI Style */
+  /* Metric cards — subtle, professional, theme-aware */
   [data-testid="stMetric"] {
-    background-color: #FFFFFF;
-    border: 1px solid #E1DFDD;
-    border-left: 6px solid #0078D7;
-    border-radius: 4px; padding: 16px 18px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-left: 4px solid #2563EB;
+    border-radius: 8px;
+    padding: 16px 20px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
   }
   [data-testid="stMetricLabel"] {
-    color: #605E5C; font-size: 13px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748B !important;
   }
   [data-testid="stMetricValue"] {
-    color: #323130; font-weight: 800; font-size: 28px;
+    font-size: 1.75rem !important;
+    font-weight: 700 !important;
+    color: #0F172A !important;
+    line-height: 1.1;
+  }
+  [data-testid="stMetricDelta"] {
+    font-size: 0.8rem !important;
   }
 
-  /* Tabs */
+  /* Tabs — clean, modern underline */
   button[data-baseweb="tab"] {
-    color: #605E5C; font-weight: 600; font-size: 15px;
+    font-weight: 600;
+    font-size: 0.95rem;
+    padding: 0.6rem 1rem;
   }
   button[data-baseweb="tab"][aria-selected="true"] {
-    color: #0078D7; border-bottom-color: #0078D7;
-    border-bottom-width: 3px;
+    color: #2563EB !important;
+    border-bottom-color: #2563EB !important;
+    border-bottom-width: 3px !important;
   }
 
-  /* General Elements */
-  hr { border-color: #E1DFDD; }
+  /* Alert boxes — theme-aware, no hard-coded colors */
   [data-testid="stAlert"] {
-    background-color: #FFF4CE;
-    border-left: 4px solid #FFB900;
-    color: #323130;
-  }
-  code {
-    background-color: #F3F2F1; color: #D13438;
-    padding: 2px 6px; border-radius: 4px;
+    border-radius: 8px;
+    padding: 0.85rem 1.1rem;
+    font-size: 0.92rem;
+    line-height: 1.55;
   }
 
-  /* Info Cards for Limitations & Recommendations */
-  .info-card {
-    background: #FFFFFF; border: 1px solid #E1DFDD;
-    border-left: 6px solid #0078D7; border-radius: 4px;
-    padding: 18px 22px; margin-bottom: 16px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-  }
-  .info-card.warn { border-left-color: #D13438; }
-  .info-card.ok   { border-left-color: #107C10; }
-  .info-card.info { border-left-color: #00B7C3; }
-  .info-card h4 {
-    color: #0078D7; margin-top: 0; margin-bottom: 8px; font-size: 17px;
-    font-weight: 700;
-  }
-  .info-card.warn h4 { color: #D13438; }
-  .info-card.ok h4   { color: #107C10; }
-  .info-card.info h4 { color: #00B7C3; }
-  
-  .info-card p, .info-card li { color: #323130; line-height: 1.6; }
-  .info-card .tag {
-    display: inline-block; background: #F3F2F1; color: #605E5C;
-    border-radius: 12px; padding: 4px 12px; font-size: 12px;
-    font-weight: 700; margin-right: 6px; margin-bottom: 6px;
-  }
-
+  /* Scope pill */
   .scope-pill {
-    display: inline-block; background: #0078D7; color: #FFFFFF;
-    border-radius: 16px; padding: 4px 14px; font-size: 13px; 
-    font-weight: 700; margin-bottom: 6px;
+    display: inline-block;
+    background: #E0E7FF;
+    color: #3730A3;
+    border-radius: 999px;
+    padding: 0.35rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 600;
+    margin: 0.5rem 0 1rem 0;
+  }
+
+  /* Info cards for limitations & recommendations */
+  .info-card {
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-left: 4px solid #2563EB;
+    border-radius: 8px;
+    padding: 1.1rem 1.4rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+  }
+  .info-card.warn    { border-left-color: #EF4444; }
+  .info-card.ok      { border-left-color: #10B981; }
+  .info-card.info    { border-left-color: #0D9488; }
+
+  .info-card h4 {
+    color: #0F172A;
+    margin: 0 0 0.6rem 0;
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.35;
+  }
+  .info-card.warn h4 { color: #B91C1C; }
+  .info-card.ok h4   { color: #047857; }
+  .info-card.info h4 { color: #0F766E; }
+
+  .info-card p, .info-card li {
+    color: #334155;
+    line-height: 1.6;
+    margin-bottom: 0.5rem;
+    font-size: 0.92rem;
+  }
+  .info-card p:last-child { margin-bottom: 0; }
+
+  .tag-row { margin-bottom: 0.6rem; }
+  .info-card .tag {
+    display: inline-block;
+    background: #F1F5F9;
+    color: #475569;
+    border-radius: 6px;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin-right: 0.35rem;
+    margin-bottom: 0.25rem;
+    letter-spacing: 0.02em;
+  }
+
+  /* Divider spacing */
+  hr { margin: 1.5rem 0 !important; }
+
+  /* Sidebar tightening */
+  section[data-testid="stSidebar"] .block-container {
+    padding-top: 1.5rem !important;
   }
 </style>
 """
@@ -1186,24 +1267,25 @@ def _apply_global_style() -> None:
         "figure.facecolor":   "#FFFFFF",
         "axes.facecolor":     "#FFFFFF",
         "axes.grid":          True,
-        "grid.color":         "#EDEBE9",
+        "grid.color":         "#F1F5F9",
         "grid.linewidth":     0.8,
         "axes.spines.top":    False,
         "axes.spines.right":  False,
         "axes.spines.left":   False,
         "axes.spines.bottom": True,
-        "axes.edgecolor":     "#E1DFDD",
+        "axes.edgecolor":     "#E2E8F0",
         "axes.linewidth":     0.9,
         "font.family":        "sans-serif",
+        "font.sans-serif":    ["Inter", "Segoe UI", "system-ui", "sans-serif"],
         "font.size":          10,
-        "axes.titlesize":     13,
+        "axes.titlesize":     12,
         "axes.titleweight":   "bold",
-        "axes.titlecolor":    "#323130",
-        "axes.titlelocation": "left", # Power BI usually left-aligns titles
-        "axes.labelsize":     10,
-        "axes.labelcolor":    "#605E5C",
-        "xtick.color":        "#605E5C",
-        "ytick.color":        "#605E5C",
+        "axes.titlecolor":    "#1E293B",
+        "axes.titlelocation": "left",
+        "axes.labelsize":     9.5,
+        "axes.labelcolor":    "#64748B",
+        "xtick.color":        "#64748B",
+        "ytick.color":        "#64748B",
         "xtick.labelsize":    9,
         "ytick.labelsize":    9,
         "legend.frameon":     False,
@@ -1213,7 +1295,7 @@ def _apply_global_style() -> None:
 
 def render_sidebar() -> tuple[str, list[str]]:
     st.sidebar.title("Filters")
-    st.sidebar.markdown(
+    st.sidebar.caption(
         "Both filters apply to **every KPI and chart**. "
         "Set both to *All* to reproduce the reference values."
     )
@@ -1296,7 +1378,7 @@ def render_overview_tab(
 
     st.divider()
 
-    col_left, col_right = st.columns([1, 1])
+    col_left, col_right = st.columns(2, gap="large")
     with col_left:
         chart_review_distribution(conn, year, state_json)
     with col_right:
@@ -1312,8 +1394,7 @@ def render_theme_tab(
 ) -> None:
     st.markdown("## Customer Satisfaction")
 
-    # Row A: Score by state | Brazil map (delivered orders)
-    col_a, col_b = st.columns([1, 1])
+    col_a, col_b = st.columns(2, gap="large")
     with col_a:
         chart_state_scores(conn, year, state_json)
     with col_b:
@@ -1321,8 +1402,7 @@ def render_theme_tab(
 
     st.divider()
 
-    # Row B: On-time vs late | Delivery buckets
-    col_c, col_d = st.columns([1, 1])
+    col_c, col_d = st.columns(2, gap="large")
     with col_c:
         chart_ontime_by_state(conn, year, state_json)
     with col_d:
@@ -1330,8 +1410,7 @@ def render_theme_tab(
 
     st.divider()
 
-    # Row C: Punctuality vs satisfaction | Monthly trend
-    col_e, col_f = st.columns([1, 1])
+    col_e, col_f = st.columns(2, gap="large")
     with col_e:
         chart_punctuality_vs_satisfaction(conn, year, state_json)
     with col_f:
@@ -1443,7 +1522,7 @@ def render_detail_tab(
           AND order_delivered_customer_date > order_estimated_delivery_date
     """, label="days-late diagnostic")
 
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns(2, gap="large")
     with c1:
         st.markdown("**Reviews fan-out**")
         if not reviews_qa.empty:
@@ -1473,11 +1552,10 @@ def render_detail_tab(
 
 def render_recommendations_tab() -> None:
     st.markdown("## Recommendations")
-    st.markdown(
-        "Prioritised actions following from the headline finding. "
-        "They are based on the **whole dataset**, so they do not change "
-        "when the sidebar filters move — a decision should not flip "
-        "because someone narrowed the view."
+    st.caption(
+        "**These actions do not respond to the sidebar filters.** "
+        "They are derived from the whole dataset, because a strategic "
+        "decision should not flip simply because someone narrowed the view."
     )
 
     st.divider()
@@ -1551,6 +1629,7 @@ def main() -> None:
         page_title="Customer Satisfaction Dashboard",
         page_icon="📊",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
     _apply_global_style()
 
@@ -1566,24 +1645,14 @@ def main() -> None:
     filter_active = year != "All" or "All" not in states
 
     st.markdown(
-        """
-        <h1 style="
-            color: #323130; font-size: 32px; font-weight: 800;
-            letter-spacing: -0.02em; margin-bottom: 4px; padding-bottom: 0;">
-          Customer Satisfaction Dashboard
-        </h1>
-        <p style='color:#605E5C; font-size:14px; margin-top:0;'>
-          PORA Academy Cohort 7 — Group 1 Capstone Project
-        </p>
-        """,
+        "<h1 style='margin-bottom:0.15rem;'>Customer Satisfaction Dashboard</h1>",
         unsafe_allow_html=True,
     )
+    st.caption("PORA Academy Cohort 7 — Group 1 Capstone Project")
     st.markdown(
         f'<span class="scope-pill">Scope: {scope_label(year, state_json)}</span>',
         unsafe_allow_html=True,
     )
-    
-    st.write("") # spacer
 
     (
         tab_overview,
