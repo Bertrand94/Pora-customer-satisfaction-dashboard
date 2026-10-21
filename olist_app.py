@@ -6,16 +6,14 @@ PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 EVERY chart responds to the sidebar filters (Reporting Year + State).
 
 Tabs:
-    📊 Overview               — KPI row · Chart 1 (score distribution bar)
-                                Chart 2 (monthly trend)
-                                Chart 3 (score pie)
-    📊 Customer Satisfaction  — Chart 4 (score by state) · Chart 5 (on-time vs late)
-                                Chart 6 (punctuality vs satisfaction)
-                                Chart 7 (delivery buckets)
-                                Chart 8 (Brazil map · complete)
-    📊 Detail & Method        — Chart 9 (delivery punctuality pie)
-                                limitations + diagnostics
-    🎯 Recommendations        — prioritised actions (whole dataset)
+    Overview               — KPI row · Review score distribution
+                             Monthly trend · Review volume by year (pie)
+    Customer Satisfaction  — Score by state · On-time vs late
+                             Punctuality vs satisfaction
+                             Delivery buckets · Brazil map (complete)
+    Detail & Method        — Delivery punctuality pie · limitations
+                             + diagnostics
+    Recommendations        — prioritised actions (whole dataset)
 
 Reference KPIs (filters = All):
     Total Orders 99,441 · Delivered 96,478 · Avg Review 4.09
@@ -353,7 +351,7 @@ def query_kpis(
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §5  CHART FUNCTIONS  (9 unique charts, no duplication)
+# §5  CHART FUNCTIONS
 # ════════════════════════════════════════════════════════════════════════════
 
 def _no_data_notice(msg: str = "No data for the current filters.") -> None:
@@ -367,12 +365,12 @@ def _insight(year: str, state_json: str, text: str) -> None:
     )
 
 
-# ── Chart 1 · Review score distribution (bar) ─────────────────────────────
+# ── Review score distribution (bar) ──────────────────────────────────────
 
 def chart_review_distribution(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 1 — Review Score Distribution")
+    st.markdown("### Review Score Distribution")
     df = safe_query(conn, f"""
         SELECT CAST(r.review_score AS INTEGER) AS score,
                COUNT(*) AS reviews
@@ -424,12 +422,12 @@ def chart_review_distribution(
     )
 
 
-# ── Chart 2 · Monthly average score (line) ───────────────────────────────
+# ── Monthly average score (line) ─────────────────────────────────────────
 
 def chart_monthly_score(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 2 — Monthly Average Review Score")
+    st.markdown("### Monthly Average Review Score")
     df = safe_query(conn, f"""
         SELECT strftime('%Y-%m', o.order_purchase_timestamp) AS month,
                COUNT(*) AS reviews,
@@ -496,64 +494,74 @@ def chart_monthly_score(
     )
 
 
-# ── Chart 3 · Review score share (pie) ───────────────────────────────────
+# ── Review volume by year (pie) ──────────────────────────────────────────
 
-def chart_score_pie(
+def chart_review_volume_by_year(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 3 — Review Score Share *(pie)*")
+    st.markdown("### Review Volume Share by Year *(pie)*")
     df = safe_query(conn, f"""
-        SELECT CAST(r.review_score AS INTEGER) AS score,
+        SELECT strftime('%Y', o.order_purchase_timestamp) AS year,
                COUNT(*) AS reviews
-        FROM reviews r
-        JOIN orders o    ON r.order_id = o.order_id
+        FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
+        JOIN reviews r   ON o.order_id  = r.order_id
         WHERE {FILTER_SQL}
-        GROUP BY 1 ORDER BY 1
-    """, params=year_multi(year, state_json), label="score pie")
+        GROUP BY year ORDER BY year
+    """, params=year_multi(year, state_json), label="review volume by year")
 
     if df.empty:
         _no_data_notice()
         return
 
     total = int(df["reviews"].sum())
+    df = df.sort_values("year").reset_index(drop=True)
+
     color_map = {
-        1: PALETTE.red, 2: PALETTE.red_light,
-        3: PALETTE.grey,
-        4: PALETTE.purple_light, 5: PALETTE.purple_dark,
+        "2016": PALETTE.purple_light,
+        "2017": PALETTE.purple,
+        "2018": PALETTE.purple_dark,
     }
-    colors = [color_map.get(int(s), PALETTE.grey) for s in df["score"]]
+    colors = [color_map.get(str(y), PALETTE.grey) for y in df["year"]]
 
     fig, ax = plt.subplots(figsize=(CONFIG.pie_height, CONFIG.pie_height))
     ax.pie(
         df["reviews"],
-        labels=[f"{s}★" for s in df["score"]],
-        autopct=lambda pct: f"{pct:.1f}%",
-        startangle=90,
+        labels=[str(y) for y in df["year"]],
+        autopct=lambda pct: (
+            f"{pct:.1f}%\n({int(round(pct / 100 * total)):,})"
+            if pct > 0 else ""
+        ),
+        startangle=140,
         colors=colors,
-        explode=[0.06 if s in (1, 5) else 0 for s in df["score"]],
-        textprops={"fontsize": 11, "fontweight": "bold"},
+        explode=[0.06 if str(y) == "2018" else 0 for y in df["year"]],
+        textprops={"fontsize": 12, "fontweight": "bold"},
     )
-    ax.set_title("Review Score Share", fontsize=13, fontweight="bold",
-                 color=PALETTE.purple_dark)
+    ax.set_title(
+        "Review Volume Share by Year",
+        fontsize=13, fontweight="bold", color=PALETTE.purple_dark,
+    )
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
-    five = df.loc[df["score"] == 5, "reviews"].sum()
-    one  = df.loc[df["score"] == 1, "reviews"].sum()
+    biggest = df.loc[df["reviews"].idxmax()]
+    smallest = df.loc[df["reviews"].idxmin()]
     _insight(
         year, state_json,
-        f"{100 * five / total:.1f}% are 5★, "
-        f"{100 * one / total:.1f}% are 1★ — {five:,} vs {one:,}.",
+        f"{int(biggest['year'])} contributes the largest share "
+        f"({biggest['reviews']:,} reviews, "
+        f"{100 * biggest['reviews'] / total:.1f}%), while "
+        f"{int(smallest['year'])} contributes only "
+        f"{smallest['reviews']:,} ({100 * smallest['reviews'] / total:.1f}%).",
     )
 
 
-# ── Chart 4 · Average review score by state (horizontal bar) ─────────────
+# ── Average review score by state (horizontal bar) ──────────────────────
 
 def chart_state_scores(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 4 — Average Review Score by State *(top 10)*")
+    st.markdown("### Average Review Score by State *(top 10)*")
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS orders,
@@ -599,12 +607,12 @@ def chart_state_scores(
     _insight(year, state_json, text)
 
 
-# ── Chart 5 · On-time vs late by state (grouped bar) ─────────────────────
+# ── On-time vs late by state (grouped bar) ──────────────────────────────
 
 def chart_ontime_by_state(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 5 — On-Time vs Late Deliveries by State *(top 5)*")
+    st.markdown("### On-Time vs Late Deliveries by State *(top 5)*")
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
                COUNT(DISTINCT o.order_id) AS delivered,
@@ -664,12 +672,12 @@ def chart_ontime_by_state(
     _insight(year, state_json, text)
 
 
-# ── Chart 6 · Punctuality vs satisfaction ────────────────────────────────
+# ── Punctuality vs satisfaction ─────────────────────────────────────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 6 — Delivery Punctuality vs Satisfaction")
+    st.markdown("### Delivery Punctuality vs Satisfaction")
     df = safe_query(conn, f"""
         SELECT CASE WHEN o.order_delivered_customer_date
                          <= o.order_estimated_delivery_date
@@ -727,12 +735,12 @@ def chart_punctuality_vs_satisfaction(
     _insight(year, state_json, text)
 
 
-# ── Chart 7 · Delivery buckets ───────────────────────────────────────────
+# ── Delivery buckets ────────────────────────────────────────────────────
 
 def chart_satisfaction_by_delivery_bucket(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 7 — Satisfaction by Delivery-Time Bucket")
+    st.markdown("### Satisfaction by Delivery-Time Bucket")
     df = safe_query(conn, f"""
         SELECT CASE
                  WHEN julianday(o.order_delivered_customer_date)
@@ -823,7 +831,7 @@ def chart_satisfaction_by_delivery_bucket(
     _insight(year, state_json, text)
 
 
-# ── Chart 8 · Brazil map (COMPLETE · matplotlib) ─────────────────────────
+# ── Brazil map (complete) ───────────────────────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
@@ -842,9 +850,6 @@ def load_brazil_geojson() -> dict[str, Any]:
 
 
 def _geojson_to_gdf(geojson: dict[str, Any]) -> pd.DataFrame:
-    """Convert a Brazil-states GeoJSON FeatureCollection into a dataframe
-    with one row per state.  Uses shapely + matplotlib PathPatch, avoiding
-    a hard geopandas dependency."""
     rows: list[dict[str, Any]] = []
     for feat in geojson.get("features", []):
         props = feat.get("properties", {}) or {}
@@ -871,8 +876,7 @@ def _plot_geojson_state(
     edgecolor: str = "#FFFFFF",
     linewidth: float = 0.8,
 ) -> None:
-    """Draw a single GeoJSON geometry (Polygon / MultiPolygon) on ax."""
-    gtype = geometry.get("type")
+    gtype  = geometry.get("type")
     coords = geometry.get("coordinates")
     if not gtype or not coords:
         return
@@ -884,7 +888,6 @@ def _plot_geojson_state(
         polygons = coords
 
     for poly in polygons:
-        # poly is a list of rings; ring 0 is the exterior
         for ring_idx, ring in enumerate(poly):
             if not ring:
                 continue
@@ -902,10 +905,7 @@ def _plot_geojson_state(
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart 8 · Complete Brazil map — all 27 states shown, colored by the
-    average review score for the current selection.  States not in the
-    current filter are rendered in a light grey but remain visible."""
-    st.markdown("### Chart 8 — Brazil Map · Avg Review Score *(complete)*")
+    st.markdown("### Brazil Map · Avg Review Score *(complete)*")
 
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
@@ -922,8 +922,8 @@ def chart_brazil_map(
         _no_data_notice("No state-level data for this year.")
         return
 
-    selected       = selected_states(state_json)
-    filter_active  = len(selected) > 0
+    selected      = selected_states(state_json)
+    filter_active = len(selected) > 0
 
     try:
         geojson = load_brazil_geojson()
@@ -938,9 +938,7 @@ def chart_brazil_map(
         return
 
     score_by_state = dict(zip(df["state"], df["avg_score"]))
-    orders_by_state = dict(zip(df["state"], df["orders"]))
 
-    # Determine colour scale domain from the states that actually have data
     scores_in_scope = [
         score_by_state[s] for s in score_by_state
         if score_by_state[s] is not None
@@ -966,11 +964,10 @@ def chart_brazil_map(
         pad=14,
     )
 
-    # First pass: draw all states so the outline of Brazil is complete
     for _, row in gdf.iterrows():
-        state  = row["state"]
-        geom   = row["geometry"]
-        score  = score_by_state.get(state)
+        state     = row["state"]
+        geom      = row["geometry"]
+        score     = score_by_state.get(state)
         in_filter = (not filter_active) or (state in selected)
 
         if score is not None and in_filter:
@@ -980,15 +977,13 @@ def chart_brazil_map(
 
         _plot_geojson_state(ax, geom, facecolor=facecolor)
 
-    # Second pass: label the centroid of every state
     for _, row in gdf.iterrows():
-        state = row["state"]
-        geom  = row["geometry"]
-        score = score_by_state.get(state)
+        state     = row["state"]
+        geom      = row["geometry"]
+        score     = score_by_state.get(state)
         in_filter = (not filter_active) or (state in selected)
 
-        # Compute a rough centroid from the outer ring
-        gtype = geom.get("type")
+        gtype  = geom.get("type")
         coords = geom.get("coordinates")
         if not gtype or not coords:
             continue
@@ -1004,17 +999,17 @@ def chart_brazil_map(
         cy = sum(pt[1] for pt in ring) / len(ring)
 
         if score is not None and in_filter:
-            label   = f"{state}\n{score:.2f}"
-            color   = "#1F2937"
-            weight  = "bold"
+            label  = f"{state}\n{score:.2f}"
+            color  = "#1F2937"
+            weight = "bold"
         elif score is not None:
-            label   = f"{state}\n{score:.2f}"
-            color   = "#9CA3AF"
-            weight  = "normal"
+            label  = f"{state}\n{score:.2f}"
+            color  = "#9CA3AF"
+            weight = "normal"
         else:
-            label   = state
-            color   = "#9CA3AF"
-            weight  = "normal"
+            label  = state
+            color  = "#9CA3AF"
+            weight = "normal"
 
         ax.text(
             cx, cy, label,
@@ -1022,12 +1017,10 @@ def chart_brazil_map(
             fontsize=7.5, color=color, fontweight=weight, zorder=5,
         )
 
-    # Brazil bounds — fixed so the map is always complete
     ax.set_xlim(-74.0, -34.0)
     ax.set_ylim(-34.0,  6.0)
     ax.set_aspect("equal")
 
-    # Horizontal colour bar
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
     cbar = fig.colorbar(
@@ -1063,12 +1056,12 @@ def chart_brazil_map(
     )
 
 
-# ── Chart 9 · Delivery punctuality pie ───────────────────────────────────
+# ── Delivery punctuality pie ────────────────────────────────────────────
 
 def chart_punctuality_pie(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Chart 9 — Delivery Punctuality Share *(pie)*")
+    st.markdown("### Delivery Punctuality Share *(pie)*")
     df = safe_query(conn, f"""
         SELECT CASE WHEN o.order_delivered_customer_date
                          <= o.order_estimated_delivery_date
@@ -1224,21 +1217,6 @@ GLOBAL_CSS: Final[str] = """
     font-weight: 700; margin-right: 6px; margin-bottom: 6px;
   }
 
-  .mode-badge {
-    display: inline-block; padding: 6px 14px;
-    border-radius: 20px; font-size: 12px; font-weight: 800;
-    letter-spacing: 0.08em; text-transform: uppercase;
-    margin-bottom: 12px;
-  }
-  .mode-analysis {
-    background: #EDE9FE; color: #4C1D95;
-    border: 1px solid #C4B5FD;
-  }
-  .mode-decision {
-    background: #FEF3C7; color: #92400E;
-    border: 1px solid #FDE68A;
-  }
-
   .scope-pill {
     display: inline-block; background: #FFFFFF; color: #6D3FB5;
     border: 1px solid #C4B5FD; border-radius: 16px;
@@ -1281,7 +1259,7 @@ def _apply_global_style() -> None:
 
 
 def render_sidebar() -> tuple[str, list[str]]:
-    st.sidebar.title("📊 Filters")
+    st.sidebar.title("Filters")
     st.sidebar.markdown(
         "Both filters apply to **every KPI and chart**. "
         "Set both to *All* to reproduce the reference values."
@@ -1329,10 +1307,6 @@ def render_overview_tab(
     conn: sqlite3.Connection, year: str, state_json: str,
     filter_active: bool,
 ) -> None:
-    st.markdown(
-        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
-        unsafe_allow_html=True,
-    )
     st.markdown("## Overview")
 
     k = query_kpis(conn, year, state_json)
@@ -1379,7 +1353,7 @@ def render_overview_tab(
 
     _, mid, _ = st.columns([1, 2, 1])
     with mid:
-        chart_score_pie(conn, year, state_json)
+        chart_review_volume_by_year(conn, year, state_json)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1389,10 +1363,6 @@ def render_overview_tab(
 def render_theme_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
-        unsafe_allow_html=True,
-    )
     st.markdown("## Customer Satisfaction")
 
     col_a, col_b = st.columns([1, 1])
@@ -1409,7 +1379,7 @@ def render_theme_tab(
     with col_c:
         chart_satisfaction_by_delivery_bucket(conn, year, state_json)
     with col_d:
-        st.empty()  # placeholder to keep 2-col rhythm
+        st.empty()
 
     st.divider()
     chart_brazil_map(conn, year, state_json)
@@ -1422,10 +1392,6 @@ def render_theme_tab(
 def render_detail_tab(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown(
-        '<span class="mode-badge mode-analysis">📊 Data Analysis</span>',
-        unsafe_allow_html=True,
-    )
     st.markdown("## Detail & Method")
 
     _, mid, _ = st.columns([1, 2, 1])
@@ -1559,10 +1525,6 @@ def render_detail_tab(
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations_tab() -> None:
-    st.markdown(
-        '<span class="mode-badge mode-decision">🎯 Decision</span>',
-        unsafe_allow_html=True,
-    )
     st.markdown("## Recommendations")
     st.markdown(
         "Prioritised actions following from the headline finding. "
@@ -1684,10 +1646,10 @@ def main() -> None:
         tab_detail,
         tab_recommendations,
     ) = st.tabs([
-        "📊 Overview",
-        "📊 Customer Satisfaction",
-        "📊 Detail & Method",
-        "🎯 Recommendations",
+        "Overview",
+        "Customer Satisfaction",
+        "Detail & Method",
+        "Recommendations",
     ])
 
     with tab_overview:
