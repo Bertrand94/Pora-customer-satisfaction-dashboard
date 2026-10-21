@@ -50,6 +50,10 @@ from matplotlib.ticker import FuncFormatter
 # §1  CONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
+# One size for every chart so the grid is visually uniform.
+CHART_FIGSIZE: Final[tuple[float, float]] = (7.5, 4.5)
+
+
 @dataclass(frozen=True)
 class Palette:
     purple:       str = "#8B5CF6"
@@ -108,14 +112,6 @@ class Config:
 
     data_cache_ttl_seconds:    Final[int] = 3600
     geojson_cache_ttl_seconds: Final[int] = 86400
-
-    chart_width_wide:   Final[float] = 11.0
-    chart_width_normal: Final[float] =  9.0
-    chart_width_narrow: Final[float] =  8.0
-    chart_height:       Final[float] =  5.5
-    chart_height_short: Final[float] =  4.5
-    pie_height:         Final[float] =  5.0
-    map_height:         Final[float] =  6.5
 
     min_reviews_per_month: Final[int] = 30
 
@@ -389,6 +385,7 @@ def chart_review_distribution(
     total = int(df["reviews"].sum())
     df["pct"] = 100.0 * df["reviews"] / total
 
+    # Colour map reused by the pie chart so the two charts share a palette.
     shades = [
         PALETTE.purple_dark if s == 5
         else PALETTE.red   if s == 1
@@ -396,8 +393,7 @@ def chart_review_distribution(
         for s in df["score"]
     ]
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
-                                    CONFIG.chart_height_short))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["score"].astype(str), df["reviews"], color=shades)
     ax.set_title("Review Score Distribution")
     ax.set_xlabel("Review score (stars)")
@@ -444,8 +440,7 @@ def chart_monthly_score(
         _no_data_notice()
         return
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_wide,
-                                    CONFIG.chart_height_short))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.plot(df["month"], df["avg_score"], marker="o",
             color=PALETTE.purple_dark, linewidth=2.5, markersize=5)
     ax.set_title("Monthly Average Review Score")
@@ -496,6 +491,9 @@ def chart_monthly_score(
 
 
 # ── Review volume by year (pie) ──────────────────────────────────────────
+#   Uses the same palette family as Review Score Distribution:
+#   purple-dark → purple → purple-light, so the two side-by-side charts
+#   look visually paired.
 
 def chart_review_volume_by_year(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -518,14 +516,18 @@ def chart_review_volume_by_year(
     total = int(df["reviews"].sum())
     df = df.sort_values("year").reset_index(drop=True)
 
-    color_map = {
-        "2016": PALETTE.purple_light,
-        "2017": PALETTE.purple,
-        "2018": PALETTE.purple_dark,
-    }
-    colors = [color_map.get(str(y), PALETTE.grey) for y in df["year"]]
+    # Same purple family as the review-score bar chart (matching colours).
+    year_palette = [
+        PALETTE.purple_light,
+        PALETTE.purple,
+        PALETTE.purple_dark,
+        PALETTE.slate,
+        PALETTE.grey,
+    ]
+    colors = [year_palette[i % len(year_palette)]
+              for i in range(len(df))]
 
-    fig, ax = plt.subplots(figsize=(CONFIG.pie_height, CONFIG.pie_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.pie(
         df["reviews"],
         labels=[str(y) for y in df["year"]],
@@ -535,8 +537,8 @@ def chart_review_volume_by_year(
         ),
         startangle=140,
         colors=colors,
-        explode=[0.06 if str(y) == "2018" else 0 for y in df["year"]],
-        textprops={"fontsize": 12, "fontweight": "bold"},
+        explode=[0.06 if i == len(df) - 1 else 0 for i in range(len(df))],
+        textprops={"fontsize": 11, "fontweight": "bold"},
     )
     ax.set_title(
         "Review Volume Share by Year",
@@ -579,8 +581,7 @@ def chart_state_scores(
         return
 
     plot_df = df.sort_values("avg_score", ascending=True)
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
-                                    CONFIG.chart_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.barh(plot_df["state"], plot_df["avg_score"],
                    color=PALETTE.purple)
     ax.set_title("Average Review Score by State (top 10 by orders)")
@@ -590,7 +591,7 @@ def chart_state_scores(
     for bar, score, n in zip(bars, plot_df["avg_score"], plot_df["orders"]):
         ax.text(score + 0.03, bar.get_y() + bar.get_height() / 2,
                 f"{score:.2f}  (n={n:,})",
-                va="center", fontsize=10,
+                va="center", fontsize=9,
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -633,8 +634,7 @@ def chart_ontime_by_state(
         _no_data_notice()
         return
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
-                                    CONFIG.chart_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     positions = range(len(df))
     width = 0.4
     ax.bar([i - width / 2 for i in positions], df["on_time"], width,
@@ -703,8 +703,7 @@ def chart_punctuality_vs_satisfaction(
     color_map = {"On Time": PALETTE.purple, "Late": PALETTE.red}
     colors = [color_map.get(s, PALETTE.grey) for s in df["delivery_status"]]
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_narrow,
-                                    CONFIG.chart_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["delivery_status"], df["avg_score"], color=colors)
     ax.set_title("Delivery Punctuality vs Satisfaction")
     ax.set_xlabel("")
@@ -715,7 +714,7 @@ def chart_punctuality_vs_satisfaction(
     ):
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,}; {days}d avg)",
-                ha="center", va="bottom", fontsize=11,
+                ha="center", va="bottom", fontsize=10,
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -762,7 +761,7 @@ def chart_punctuality_vs_satisfaction(
             "delivery_status":   "Delivery punctuality",
             "avg_score":         "Average review score",
         },
-        title="Q6: Delivery Punctuality vs Customer Satisfaction",
+        # Title intentionally removed per request.
     )
     fig_plotly.update_traces(
         texttemplate="%{text:.2f} stars",
@@ -771,11 +770,11 @@ def chart_punctuality_vs_satisfaction(
     fig_plotly.update_layout(
         yaxis=dict(range=[0, 5], dtick=1),
         showlegend=False,
-        height=450,
+        height=420,
+        margin=dict(l=10, r=10, t=10, b=10),
     )
     st.plotly_chart(fig_plotly, use_container_width=True)
 
-    # Key-finding info box for the Plotly companion
     score_by_label = plotly_df.set_index("delivery_status")["avg_score"]
     if (
         "On-time / early" in score_by_label.index
@@ -848,8 +847,7 @@ def chart_satisfaction_by_delivery_bucket(
     colors = [palette_by_bucket.get(b, PALETTE.grey)
               for b in df["delivery_bucket"]]
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
-                                    CONFIG.chart_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["delivery_bucket"], df["avg_score"], color=colors)
     ax.set_title("Satisfaction by Delivery-Time Bucket")
     ax.set_xlabel("Days from purchase to delivery")
@@ -861,7 +859,7 @@ def chart_satisfaction_by_delivery_bucket(
     for bar, score, n in zip(bars, df["avg_score"], df["orders"]):
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,})",
-                ha="center", va="bottom", fontsize=10,
+                ha="center", va="bottom", fontsize=9,
                 color=PALETTE.purple_dark, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -889,7 +887,7 @@ def chart_satisfaction_by_delivery_bucket(
     _insight(year, state_json, text)
 
 
-# ── Brazil map (complete) ───────────────────────────────────────────────
+# ── Brazil map · Delivered Orders (complete) ────────────────────────────
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any]:
@@ -963,16 +961,17 @@ def _plot_geojson_state(
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Brazil Map · Avg Review Score *(complete)*")
+    """Chart · Brazil Map · Delivered Orders (complete) — all 27 states
+    are always rendered. States not in the current filter are shown in
+    light grey but remain visible."""
+    st.markdown("### Brazil Map · Delivered Orders *(complete)*")
 
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
-               COUNT(DISTINCT o.order_id) AS orders,
-               ROUND(AVG(CAST(r.review_score AS REAL)), 3) AS avg_score
+               COUNT(DISTINCT o.order_id) AS delivered_orders
         FROM orders o
         JOIN customers c ON o.customer_id = c.customer_id
-        JOIN reviews r  ON o.order_id  = r.order_id
-        WHERE {YEAR_SQL}
+        WHERE {DELIVERED_SQL} AND {YEAR_SQL}
         GROUP BY state
     """, params=year_params(year), label="Brazil map data")
 
@@ -995,41 +994,40 @@ def chart_brazil_map(
         st.warning("⚠️ No state geometries could be parsed.")
         return
 
-    score_by_state = dict(zip(df["state"], df["avg_score"]))
+    orders_by_state = dict(zip(df["state"], df["delivered_orders"]))
 
-    scores_in_scope = [
-        score_by_state[s] for s in score_by_state
-        if score_by_state[s] is not None
+    counts_in_scope = [
+        orders_by_state[s] for s in orders_by_state
+        if orders_by_state[s] is not None
     ]
-    if not scores_in_scope:
+    if not counts_in_scope:
         _no_data_notice()
         return
 
-    lo_c = max(0.5, float(min(scores_in_scope)) - 0.05)
-    hi_c = float(max(scores_in_scope)) + 0.05
-    if hi_c - lo_c < 0.1:
-        hi_c = lo_c + 0.1
+    lo_c = 0.0
+    hi_c = float(max(counts_in_scope)) * 1.05
+    if hi_c - lo_c < 1:
+        hi_c = lo_c + 1
 
-    cmap = plt.get_cmap("RdYlGn")
+    cmap = plt.get_cmap("YlGn")
     norm = mpl.colors.Normalize(vmin=lo_c, vmax=hi_c)
 
-    fig, ax = plt.subplots(figsize=(CONFIG.chart_width_normal,
-                                    CONFIG.map_height))
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.set_axis_off()
     ax.set_title(
-        f"Average Review Score by State — {scope_label(year, state_json)}",
+        f"Delivered Orders by State — {scope_label(year, state_json)}",
         fontsize=12, fontweight="bold", color=PALETTE.purple_dark,
-        pad=12,
+        pad=8,
     )
 
     for _, row in gdf.iterrows():
         state     = row["state"]
         geom      = row["geometry"]
-        score     = score_by_state.get(state)
+        count     = orders_by_state.get(state)
         in_filter = (not filter_active) or (state in selected)
 
-        if score is not None and in_filter:
-            facecolor = cmap(norm(score))
+        if count is not None and in_filter:
+            facecolor = cmap(norm(count))
         else:
             facecolor = PALETTE.grey_light
 
@@ -1038,7 +1036,7 @@ def chart_brazil_map(
     for _, row in gdf.iterrows():
         state     = row["state"]
         geom      = row["geometry"]
-        score     = score_by_state.get(state)
+        count     = orders_by_state.get(state)
         in_filter = (not filter_active) or (state in selected)
 
         gtype  = geom.get("type")
@@ -1056,12 +1054,12 @@ def chart_brazil_map(
         cx = sum(pt[0] for pt in ring) / len(ring)
         cy = sum(pt[1] for pt in ring) / len(ring)
 
-        if score is not None and in_filter:
-            label  = f"{state}\n{score:.2f}"
+        if count is not None and in_filter:
+            label  = f"{state}\n{int(count):,}"
             color  = "#1F2937"
             weight = "bold"
-        elif score is not None:
-            label  = f"{state}\n{score:.2f}"
+        elif count is not None:
+            label  = f"{state}\n{int(count):,}"
             color  = "#9CA3AF"
             weight = "normal"
         else:
@@ -1072,7 +1070,7 @@ def chart_brazil_map(
         ax.text(
             cx, cy, label,
             ha="center", va="center",
-            fontsize=6.5, color=color, fontweight=weight, zorder=5,
+            fontsize=5.5, color=color, fontweight=weight, zorder=5,
         )
 
     ax.set_xlim(-74.0, -34.0)
@@ -1085,7 +1083,7 @@ def chart_brazil_map(
         sm, ax=ax, orientation="horizontal",
         fraction=0.04, pad=0.04, shrink=0.7,
     )
-    cbar.set_label("Average review score (1–5)", fontsize=9,
+    cbar.set_label("Delivered orders", fontsize=9,
                    color=PALETTE.purple_dark)
     cbar.ax.tick_params(labelsize=8)
 
@@ -1093,8 +1091,8 @@ def chart_brazil_map(
     plt.close(fig)
 
     in_scope = [
-        (s, score_by_state[s]) for s in score_by_state
-        if score_by_state[s] is not None
+        (s, orders_by_state[s]) for s in orders_by_state
+        if orders_by_state[s] is not None
         and ((not filter_active) or (s in selected))
     ]
     if not in_scope:
@@ -1105,12 +1103,13 @@ def chart_brazil_map(
     mode_note = (
         "Selected states are coloured; the rest are greyed out."
         if filter_active else
-        "All 27 states are coloured by their average review score."
+        "All 27 states are coloured by their delivered order count."
     )
     _insight(
         year, state_json,
-        f"{lo_s} ({lo_v:.2f}) is lowest and {hi_s} ({hi_v:.2f}) is "
-        f"highest among states in the current selection. {mode_note}",
+        f"{lo_s} ({int(lo_v):,}) has the fewest delivered orders and "
+        f"{hi_s} ({int(hi_v):,}) the most among states in the current "
+        f"selection. {mode_note}",
     )
 
 
@@ -1251,19 +1250,19 @@ def _apply_global_style() -> None:
         "axes.edgecolor":     "#D8CDF0",
         "axes.linewidth":     0.9,
         "font.family":        "sans-serif",
-        "font.size":          11,
-        "axes.titlesize":     13,
+        "font.size":          10,
+        "axes.titlesize":     12,
         "axes.titleweight":   "bold",
         "axes.titlecolor":    "#4C1D95",
         "axes.titlelocation": "center",
-        "axes.labelsize":     10,
+        "axes.labelsize":     9,
         "axes.labelcolor":    "#6B7280",
         "xtick.color":        "#6B7280",
         "ytick.color":        "#6B7280",
-        "xtick.labelsize":    9,
-        "ytick.labelsize":    9,
+        "xtick.labelsize":    8,
+        "ytick.labelsize":    8,
         "legend.frameon":     False,
-        "legend.fontsize":    9,
+        "legend.fontsize":    8,
     })
 
 
@@ -1352,7 +1351,6 @@ def render_overview_tab(
 
     st.divider()
 
-    # Side by side: Review Score Distribution | Review Volume Share by Year
     col_left, col_right = st.columns([1, 1])
     with col_left:
         chart_review_distribution(conn, year, state_json)
@@ -1369,7 +1367,7 @@ def render_theme_tab(
 ) -> None:
     st.markdown("## Customer Satisfaction")
 
-    # Row A: Score by state | Brazil map
+    # Row A: Score by state | Brazil map (delivered orders)
     col_a, col_b = st.columns([1, 1])
     with col_a:
         chart_state_scores(conn, year, state_json)
