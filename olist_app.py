@@ -117,7 +117,7 @@ class Config:
         "https://raw.githubusercontent.com/tbrugz/"
         "vector-json/master/brazil-states.geojson",
     )
-    geojson_timeout_seconds: Final[int] = 20
+    geojson_timeout_seconds: Final[int] = 8
 
     data_cache_ttl_seconds:    Final[int] = 3600
     geojson_cache_ttl_seconds: Final[int] = 86400
@@ -333,7 +333,9 @@ def query_kpis(
     """, params=params, label="KPI row")
 
     score_df = safe_query(conn, f"""
-        SELECT ROUND(AVG(CAST(r.review_score AS REAL)), 2) AS avg_review_score
+        SELECT ROUND(AVG(CAST(r.review_score AS REAL)), 2) AS avg_review_score,
+               ROUND(100.0 * SUM(CASE WHEN r.review_score >= 4 THEN 1 ELSE 0 END)
+                     / NULLIF(COUNT(*), 0), 1) AS positive_review_pct
         FROM reviews r
         JOIN orders o    ON r.order_id = o.order_id
         JOIN customers c ON o.customer_id = c.customer_id
@@ -344,6 +346,7 @@ def query_kpis(
         "total_orders":      safe_scalar(df, "total_orders", 0),
         "delivered_orders":  safe_scalar(df, "delivered_orders", 0),
         "avg_review_score":  safe_scalar(score_df, "avg_review_score"),
+        "positive_review_pct": safe_scalar(score_df, "positive_review_pct"),
         "late_deliveries":   safe_scalar(df, "late_deliveries", 0),
         "avg_delivery_days": safe_scalar(df, "avg_delivery_days"),
     }
@@ -426,7 +429,7 @@ def chart_review_distribution(
                 f"{pct:.1f}%", ha="center", va="bottom", fontsize=10,
                 color=PALETTE.text, fontweight="bold")
 
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     def share(score: int) -> float:
@@ -497,7 +500,7 @@ def chart_monthly_score(
         fontsize=10, color=PALETTE.red, fontweight="bold",
     )
 
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     noisy = int((df["reviews"] < CONFIG.min_reviews_per_month).sum())
@@ -515,12 +518,12 @@ def chart_monthly_score(
     )
 
 
-# ── Review volume by year (pie) ──────────────────────────────────────────
+# ── Review volume by year (bar) ──────────────────────────────────────────
 
 def chart_review_volume_by_year(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    st.markdown("### Review Volume Share by Year")
+    st.markdown("### Review Volume by Year")
     df = safe_query(conn, f"""
         SELECT strftime('%Y', o.order_purchase_timestamp) AS year,
                COUNT(*) AS reviews
@@ -538,26 +541,30 @@ def chart_review_volume_by_year(
     total = int(df["reviews"].sum())
     df = df.sort_values("year").reset_index(drop=True)
 
-    year_palette = [PALETTE.blue_light, PALETTE.blue, PALETTE.teal, PALETTE.green]
-    colors = [year_palette[i % len(year_palette)] for i in range(len(df))]
-
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
-    ax.pie(
-        df["reviews"],
-        labels=[str(y) for y in df["year"]],
-        autopct=lambda pct: (
-            f"{pct:.1f}%\n({int(round(pct / 100 * total)):,})"
-            if pct > 0 else ""
-        ),
-        startangle=140,
-        colors=colors,
-        explode=[0.06 if i == len(df) - 1 else 0 for i in range(len(df))],
-        textprops={"fontsize": 11, "fontweight": "bold",
-                   "color": PALETTE.text},
-    )
-    ax.set_title("Review Volume Share by Year", pad=15)
-    st.pyplot(fig, use_container_width=True)
+    bars = ax.bar(df["year"].astype(str), df["reviews"], color=PALETTE.teal)
+    ax.set_title("Review Volume by Year", pad=15)
+    ax.set_xlabel("Purchase year")
+    ax.set_ylabel("Number of reviews")
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
+    ax.set_ylim(0, df["reviews"].max() * 1.15)
+    for bar, count in zip(bars, df["reviews"]):
+        pct = 100.0 * count / total
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                f"{count:,}  ·  {pct:.1f}%", ha="center", va="bottom",
+                fontsize=9, color=PALETTE.text, fontweight="bold")
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
+
+    if len(df) == 1:
+        row = df.iloc[0]
+        _insight(
+            year, state_json,
+            f"The current selection contains {int(row['reviews']):,} reviews "
+            f"from {int(row['year'])}. Select All years to compare year-level "
+            "volume; 2016 and 2018 are partial years.",
+        )
+        return
 
     biggest  = df.loc[df["reviews"].idxmax()]
     smallest = df.loc[df["reviews"].idxmin()]
@@ -567,7 +574,8 @@ def chart_review_volume_by_year(
         f"({biggest['reviews']:,} reviews, "
         f"{100 * biggest['reviews'] / total:.1f}%), while "
         f"{int(smallest['year'])} contributes only "
-        f"{smallest['reviews']:,} ({100 * smallest['reviews'] / total:.1f}%).",
+        f"{smallest['reviews']:,} ({100 * smallest['reviews'] / total:.1f}%). "
+        "These totals are not like-for-like: 2016 and 2018 are partial years.",
     )
 
 
@@ -604,7 +612,7 @@ def chart_state_scores(
                 f"{score:.2f}  (n={n:,})",
                 va="center", fontsize=9,
                 color=PALETTE.text, fontweight="bold")
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     low  = plot_df.iloc[0]
@@ -662,7 +670,7 @@ def chart_ontime_by_state(
     ax.set_ylabel("Delivered orders")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
     ax.legend(frameon=False)
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     df = df.assign(late_rate=100.0 * df["late"] / df["delivered"])
@@ -732,16 +740,17 @@ def chart_punctuality_vs_satisfaction(
                 f"{score:.2f}\n(n={n:,}; {days}d avg)",
                 ha="center", va="bottom", fontsize=10,
                 color=PALETTE.text, fontweight="bold")
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     scores = dict(zip(df["delivery_status"], df["avg_score"]))
     if "On Time" in scores and "Late" in scores:
         gap = scores["On Time"] - scores["Late"]
         text = (
-            f"Late deliveries cost **{gap:.2f} stars** — "
-            f"{scores['On Time']:.2f} on time vs {scores['Late']:.2f} late. "
-            f"Reducing lateness is the highest-leverage intervention."
+            f"Late orders average {gap:.2f} stars lower "
+            f"({scores['On Time']:.2f} on time vs {scores['Late']:.2f} late). "
+            "This is an association, not proof of causation; investigate "
+            "delivery reliability alongside other service factors."
         )
         level = "error" if gap >= 1.5 else "warning"
     else:
@@ -822,7 +831,7 @@ def chart_satisfaction_by_delivery_bucket(
                 f"{score:.2f}\n(n={n:,})",
                 ha="center", va="bottom", fontsize=9,
                 color=PALETTE.text, fontweight="bold")
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     if len(df) == 1:
@@ -841,8 +850,6 @@ def chart_satisfaction_by_delivery_bucket(
             if not below.empty else
             "No bucket falls below the selection average."
         )
-        step = float(df.iloc[2]["avg_score"] - df.iloc[3]["avg_score"]) \
-            if len(df) >= 4 else 0.0
         text = (
             f"Scores run from {first['avg_score']:.2f} "
             f"({first['delivery_bucket']}) to {last['avg_score']:.2f} "
@@ -1060,7 +1067,7 @@ def chart_brazil_map(
     cbar.set_label("Delivered orders", fontsize=9, color=PALETTE.text)
     cbar.ax.tick_params(labelsize=8)
 
-    st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, width="stretch")
     plt.close(fig)
 
     in_scope = [
@@ -1120,19 +1127,30 @@ def info_card(
 
 GLOBAL_CSS: Final[str] = """
 <style>
-  /* Minimal, purposeful CSS — Streamlit theme handles colors and fonts.
-     This only refines rhythm (spacing), card structure, and tag styling. */
+    :root {
+        --ink: #19323A;
+        --muted: #5F7376;
+        --line: #DCE7E4;
+        --surface: #FFFFFF;
+        --canvas: #F5F8F7;
+        --accent: #0F766E;
+        --coral: #D7664C;
+    }
+
+    .stApp { background: var(--canvas); }
+    body, button, input, textarea, [data-testid="stMarkdownContainer"] {
+        font-family: "Aptos", "Segoe UI", sans-serif;
+    }
 
   /* Main container: cap width and add breathing room */
   .block-container {
     padding-top: 2rem !important;
     padding-bottom: 3rem !important;
-    max-width: 1400px;
+        max-width: 1440px;
   }
 
-  /* Typography — use the theme's font, only adjust rhythm */
+    /* Typography and vertical rhythm */
   h1, h2, h3, h4 {
-    letter-spacing: -0.01em;
     line-height: 1.25;
   }
   h1 { margin-bottom: 0.25rem !important; }
@@ -1142,29 +1160,30 @@ GLOBAL_CSS: Final[str] = """
     font-weight: 600 !important;
     margin-top: 1rem !important;
     margin-bottom: 0.5rem !important;
-    color: #1E293B;
+        color: var(--ink);
   }
 
-  /* Metric cards — subtle, professional, theme-aware */
+    /* KPI cards emphasize the current decision signals. */
   [data-testid="stMetric"] {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-left: 4px solid #2563EB;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--accent);
     border-radius: 8px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+        padding: 15px 16px;
+        min-height: 112px;
+        box-shadow: 0 2px 5px rgba(25, 50, 58, 0.05);
   }
   [data-testid="stMetricLabel"] {
     font-size: 0.78rem !important;
     font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #64748B !important;
+        color: var(--muted) !important;
   }
   [data-testid="stMetricValue"] {
-    font-size: 1.75rem !important;
+        font-size: 1.55rem !important;
     font-weight: 700 !important;
-    color: #0F172A !important;
+        color: var(--ink) !important;
     line-height: 1.1;
   }
   [data-testid="stMetricDelta"] {
@@ -1178,8 +1197,8 @@ GLOBAL_CSS: Final[str] = """
     padding: 0.6rem 1rem;
   }
   button[data-baseweb="tab"][aria-selected="true"] {
-    color: #2563EB !important;
-    border-bottom-color: #2563EB !important;
+    color: var(--accent) !important;
+    border-bottom-color: var(--accent) !important;
     border-bottom-width: 3px !important;
   }
 
@@ -1194,8 +1213,8 @@ GLOBAL_CSS: Final[str] = """
   /* Scope pill */
   .scope-pill {
     display: inline-block;
-    background: #E0E7FF;
-    color: #3730A3;
+    background: #E1F1ED;
+    color: #145A54;
     border-radius: 999px;
     padding: 0.35rem 0.9rem;
     font-size: 0.82rem;
@@ -1205,26 +1224,26 @@ GLOBAL_CSS: Final[str] = """
 
   /* Info cards for limitations & recommendations */
   .info-card {
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-left: 4px solid #2563EB;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--accent);
     border-radius: 8px;
     padding: 1.1rem 1.4rem;
     margin-bottom: 1rem;
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
   }
-  .info-card.warn    { border-left-color: #EF4444; }
+    .info-card.warn    { border-left-color: var(--coral); }
   .info-card.ok      { border-left-color: #10B981; }
   .info-card.info    { border-left-color: #0D9488; }
 
   .info-card h4 {
-    color: #0F172A;
+    color: var(--ink);
     margin: 0 0 0.6rem 0;
     font-size: 1rem;
     font-weight: 700;
     line-height: 1.35;
   }
-  .info-card.warn h4 { color: #B91C1C; }
+    .info-card.warn h4 { color: #A5412F; }
   .info-card.ok h4   { color: #047857; }
   .info-card.info h4 { color: #0F766E; }
 
@@ -1257,6 +1276,19 @@ GLOBAL_CSS: Final[str] = """
   section[data-testid="stSidebar"] .block-container {
     padding-top: 1.5rem !important;
   }
+
+    @media (max-width: 768px) {
+        .block-container {
+            padding: 1.25rem 1rem 2rem !important;
+        }
+        [data-testid="stMetric"] {
+            min-height: 100px;
+            padding: 12px;
+        }
+        [data-testid="stMetricValue"] {
+            font-size: 1.35rem !important;
+        }
+    }
 </style>
 """
 
@@ -1276,7 +1308,7 @@ def _apply_global_style() -> None:
         "axes.edgecolor":     "#E2E8F0",
         "axes.linewidth":     0.9,
         "font.family":        "sans-serif",
-        "font.sans-serif":    ["Inter", "Segoe UI", "system-ui", "sans-serif"],
+        "font.sans-serif":    ["DejaVu Sans", "Liberation Sans", "sans-serif"],
         "font.size":          10,
         "axes.titlesize":     12,
         "axes.titleweight":   "bold",
@@ -1299,33 +1331,35 @@ def render_sidebar() -> tuple[str, list[str]]:
         "Both filters apply to **every KPI and chart**. "
         "Set both to *All* to reproduce the reference values."
     )
+    st.session_state.setdefault("filter_year", "All")
+    st.session_state.setdefault("filter_states", [])
+    if st.sidebar.button("Reset filters", width="stretch"):
+        st.session_state["filter_year"] = "All"
+        st.session_state["filter_states"] = []
 
     year = st.sidebar.selectbox(
-        "Reporting Year", CONFIG.years, index=0, key="filter_year",
+        "Reporting Year", CONFIG.years, index=None, key="filter_year",
     )
     states = st.sidebar.multiselect(
         "State",
-        options=["All", *CONFIG.all_states],
-        default=["All"],
-        help='Pick one or more states. "All" applies no state filter.',
+        options=CONFIG.all_states,
+        default=None,
+        help="Pick one or more states. Leave empty to include all states.",
         key="filter_states",
     )
     if not states:
         states = ["All"]
-    if "All" in states and len(states) > 1:
-        states = ["All"]
 
-    st.sidebar.divider()
-    st.sidebar.markdown("**Reference — filters = All**")
-    st.sidebar.markdown(
-        "| KPI | Value |\n"
-        "|---|---|\n"
-        "| Total Orders | 99,441 |\n"
-        "| Delivered | 96,478 |\n"
-        "| Avg Review | 4.09 |\n"
-        "| Late | 7,826 |\n"
-        "| Avg Delivery Days | 12.56 |"
-    )
+    with st.sidebar.expander("Reference values · All filters", expanded=False):
+        st.markdown(
+            "| KPI | Value |\n"
+            "|---|---:|\n"
+            "| Total orders | 99,441 |\n"
+            "| Delivered | 96,478 |\n"
+            "| Avg review | 4.09 |\n"
+            "| Late deliveries | 7,826 |\n"
+            "| Avg delivery | 12.56 days |"
+        )
     if year != "All" or "All" not in states:
         st.sidebar.markdown(
             f"**Active filter:** Year = `{year}` · "
@@ -1345,7 +1379,7 @@ def render_overview_tab(
     st.markdown("## Overview")
 
     k = query_kpis(conn, year, state_json)
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
     c2.metric("Delivered Orders", fmt_int(k["delivered_orders"]))
 
@@ -1359,15 +1393,22 @@ def render_overview_tab(
         )
         c3.metric("Avg Review Score", fmt_float(avg_score), delta=delta)
 
+    positive_share = k["positive_review_pct"]
+    c4.metric(
+        "Positive Reviews (4–5★)",
+        f"{positive_share:.1f}%" if positive_share is not None else "—",
+    )
+
     late_val      = k["late_deliveries"]
     delivered_val = k["delivered_orders"]
-    late_delta = (
-        f"{100 * late_val / delivered_val:.1f}% of delivered"
-        if delivered_val and delivered_val > 0 else None
+    late_rate = 100 * late_val / delivered_val if delivered_val else None
+    c5.metric(
+        "Late Delivery Rate",
+        f"{late_rate:.1f}%" if late_rate is not None else "—",
+        delta=f"{fmt_int(late_val)} orders" if late_rate is not None else None,
+        delta_color="inverse",
     )
-    c4.metric("Late Deliveries", fmt_int(late_val),
-              delta=late_delta, delta_color="inverse")
-    c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
+    c6.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
     if filter_active:
         st.info(
@@ -1421,9 +1462,7 @@ def render_theme_tab(
 # TAB 3 — DETAIL & METHOD
 # ════════════════════════════════════════════════════════════════════════════
 
-def render_detail_tab(
-    conn: sqlite3.Connection, year: str, state_json: str
-) -> None:
+def render_detail_tab(conn: sqlite3.Connection) -> None:
     st.markdown("## Detail & Method")
 
     st.markdown("### Data limitations")
@@ -1526,17 +1565,15 @@ def render_detail_tab(
     with c1:
         st.markdown("**Reviews fan-out**")
         if not reviews_qa.empty:
-            st.dataframe(reviews_qa, hide_index=True,
-                         use_container_width=True)
+            st.dataframe(reviews_qa, hide_index=True, width="stretch")
     with c2:
         st.markdown("**Customer identity**")
         if not customers_qa.empty:
-            st.dataframe(customers_qa, hide_index=True,
-                         use_container_width=True)
+            st.dataframe(customers_qa, hide_index=True, width="stretch")
 
     st.markdown("**Days late when late (whole dataset)**")
     if not days_late.empty:
-        st.dataframe(days_late, hide_index=True, use_container_width=True)
+        st.dataframe(days_late, hide_index=True, width="stretch")
         avg_late = safe_scalar(days_late, "avg_days_late")
         worst    = safe_scalar(days_late, "worst_days_late")
         st.caption(
@@ -1644,11 +1681,10 @@ def main() -> None:
     state_json    = safe_state_json(states)
     filter_active = year != "All" or "All" not in states
 
-    st.markdown(
-        "<h1 style='margin-bottom:0.15rem;'>Customer Satisfaction Dashboard</h1>",
-        unsafe_allow_html=True,
+    st.title("Customer Satisfaction Dashboard")
+    st.caption(
+        "PORA Academy Cohort 7 · Group 1 Capstone · Brazil e-commerce, 2016–2018"
     )
-    st.caption("PORA Academy Cohort 7 — Group 1 Capstone Project")
     st.markdown(
         f'<span class="scope-pill">Scope: {scope_label(year, state_json)}</span>',
         unsafe_allow_html=True,
@@ -1671,7 +1707,7 @@ def main() -> None:
     with tab_theme:
         render_theme_tab(conn, year, state_json)
     with tab_detail:
-        render_detail_tab(conn, year, state_json)
+        render_detail_tab(conn)
     with tab_recommendations:
         render_recommendations_tab()
 
