@@ -40,7 +40,6 @@ from typing import Any, Final, Iterable, Sequence
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 from matplotlib.ticker import FuncFormatter
@@ -56,17 +55,22 @@ CHART_FIGSIZE: Final[tuple[float, float]] = (7.5, 4.5)
 
 @dataclass(frozen=True)
 class Palette:
-    purple:       str = "#8B5CF6"
-    purple_dark:  str = "#6D3FB5"
-    purple_light: str = "#C4B5FD"
-    red:          str = "#D64545"
-    red_light:    str = "#F0A0A0"
-    green:        str = "#16A34A"
-    green_light:  str = "#86EFAC"
-    blue:         str = "#0EA5E9"
-    grey:         str = "#9CA3AF"
-    grey_light:   str = "#E5E7EB"
-    slate:        str = "#3F3F5A"
+    # Power BI inspired vibrant palette
+    blue:         str = "#0078D7"
+    blue_light:   str = "#50B4F2"
+    teal:         str = "#00B7C3"
+    green:        str = "#107C10"
+    green_light:  str = "#52D052"
+    orange:       str = "#FF8C00"
+    orange_light: str = "#FFB347"
+    red:          str = "#D13438"
+    red_light:    str = "#F1707A"
+    purple:       str = "#8764B8"
+    purple_light: str = "#B4A0D3"
+    yellow:       str = "#FFB900"
+    grey:         str = "#605E5C"
+    grey_light:   str = "#EDEBE9"
+    slate:        str = "#323130"
 
 
 @dataclass(frozen=True)
@@ -387,15 +391,15 @@ def chart_review_distribution(
 
     # Colour map reused by the pie chart so the two charts share a palette.
     shades = [
-        PALETTE.purple_dark if s == 5
+        PALETTE.green  if s == 5
         else PALETTE.red   if s == 1
-        else PALETTE.purple_light
+        else PALETTE.blue_light
         for s in df["score"]
     ]
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["score"].astype(str), df["reviews"], color=shades)
-    ax.set_title("Review Score Distribution")
+    ax.set_title("Review Score Distribution", pad=15)
     ax.set_xlabel("Review score (stars)")
     ax.set_ylabel("Number of reviews")
     ax.set_ylim(0, df["reviews"].max() * 1.12)
@@ -403,7 +407,7 @@ def chart_review_distribution(
     for bar, pct in zip(bars, df["pct"]):
         ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
                 f"{pct:.1f}%", ha="center", va="bottom", fontsize=10,
-                color=PALETTE.purple_dark, fontweight="bold")
+                color=PALETTE.slate, fontweight="bold")
 
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
@@ -442,8 +446,8 @@ def chart_monthly_score(
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.plot(df["month"], df["avg_score"], marker="o",
-            color=PALETTE.purple_dark, linewidth=2.5, markersize=5)
-    ax.set_title("Monthly Average Review Score")
+            color=PALETTE.teal, linewidth=2.5, markersize=5)
+    ax.set_title("Monthly Average Review Score", pad=15)
     ax.set_xlabel("Month")
     ax.set_ylabel("Avg review score (1–5)")
 
@@ -491,9 +495,6 @@ def chart_monthly_score(
 
 
 # ── Review volume by year (pie) ──────────────────────────────────────────
-#   Uses the same palette family as Review Score Distribution:
-#   purple-dark → purple → purple-light, so the two side-by-side charts
-#   look visually paired.
 
 def chart_review_volume_by_year(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -516,16 +517,9 @@ def chart_review_volume_by_year(
     total = int(df["reviews"].sum())
     df = df.sort_values("year").reset_index(drop=True)
 
-    # Same purple family as the review-score bar chart (matching colours).
-    year_palette = [
-        PALETTE.purple_light,
-        PALETTE.purple,
-        PALETTE.purple_dark,
-        PALETTE.slate,
-        PALETTE.grey,
-    ]
-    colors = [year_palette[i % len(year_palette)]
-              for i in range(len(df))]
+    # Matching the vibrant palette of the distribution chart
+    year_palette = [PALETTE.blue_light, PALETTE.blue, PALETTE.teal, PALETTE.green]
+    colors = [year_palette[i % len(year_palette)] for i in range(len(df))]
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.pie(
@@ -540,10 +534,7 @@ def chart_review_volume_by_year(
         explode=[0.06 if i == len(df) - 1 else 0 for i in range(len(df))],
         textprops={"fontsize": 11, "fontweight": "bold"},
     )
-    ax.set_title(
-        "Review Volume Share by Year",
-        fontsize=13, fontweight="bold", color=PALETTE.purple_dark,
-    )
+    ax.set_title("Review Volume Share by Year", fontsize=13, fontweight="bold", pad=15)
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -582,9 +573,8 @@ def chart_state_scores(
 
     plot_df = df.sort_values("avg_score", ascending=True)
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
-    bars = ax.barh(plot_df["state"], plot_df["avg_score"],
-                   color=PALETTE.purple)
-    ax.set_title("Average Review Score by State (top 10 by orders)")
+    bars = ax.barh(plot_df["state"], plot_df["avg_score"], color=PALETTE.orange)
+    ax.set_title("Average Review Score by State (top 10 by orders)", pad=15)
     ax.set_xlabel("Average review score (1–5)")
     ax.set_ylabel("State")
     ax.set_xlim(0, 5)
@@ -592,7 +582,7 @@ def chart_state_scores(
         ax.text(score + 0.03, bar.get_y() + bar.get_height() / 2,
                 f"{score:.2f}  (n={n:,})",
                 va="center", fontsize=9,
-                color=PALETTE.purple_dark, fontweight="bold")
+                color=PALETTE.slate, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -638,12 +628,12 @@ def chart_ontime_by_state(
     positions = range(len(df))
     width = 0.4
     ax.bar([i - width / 2 for i in positions], df["on_time"], width,
-           label="On Time", color=PALETTE.purple)
+           label="On Time", color=PALETTE.green)
     ax.bar([i + width / 2 for i in positions], df["late"], width,
            label="Late", color=PALETTE.red)
     ax.set_xticks(list(positions))
     ax.set_xticklabels(df["state"])
-    ax.set_title("On-Time vs Late Deliveries by State (top 5)")
+    ax.set_title("On-Time vs Late Deliveries by State (top 5)", pad=15)
     ax.set_xlabel("State")
     ax.set_ylabel("Delivered orders")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
@@ -673,7 +663,7 @@ def chart_ontime_by_state(
     _insight(year, state_json, text)
 
 
-# ── Punctuality vs satisfaction (matplotlib + Plotly companion) ─────────
+# ── Punctuality vs satisfaction ─────────────────────────────────────────
 
 def chart_punctuality_vs_satisfaction(
     conn: sqlite3.Connection, year: str, state_json: str
@@ -700,12 +690,12 @@ def chart_punctuality_vs_satisfaction(
         _no_data_notice()
         return
 
-    color_map = {"On Time": PALETTE.purple, "Late": PALETTE.red}
+    color_map = {"On Time": PALETTE.green, "Late": PALETTE.red}
     colors = [color_map.get(s, PALETTE.grey) for s in df["delivery_status"]]
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["delivery_status"], df["avg_score"], color=colors)
-    ax.set_title("Delivery Punctuality vs Satisfaction")
+    ax.set_title("Delivery Punctuality vs Satisfaction", pad=15)
     ax.set_xlabel("")
     ax.set_ylabel("Avg review score (1–5)")
     ax.set_ylim(1, 5.4)
@@ -715,7 +705,7 @@ def chart_punctuality_vs_satisfaction(
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,}; {days}d avg)",
                 ha="center", va="bottom", fontsize=10,
-                color=PALETTE.purple_dark, fontweight="bold")
+                color=PALETTE.slate, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -733,63 +723,6 @@ def chart_punctuality_vs_satisfaction(
             "on-time vs late gap can be computed."
         )
     _insight(year, state_json, text)
-
-    # ── Plotly companion: "On-time / early" vs "Late" ────────────────────
-    plotly_df = df.copy()
-    plotly_df["delivery_status"] = plotly_df["delivery_status"].map({
-        "On Time": "On-time / early",
-        "Late":    "Late",
-    })
-    plotly_df["delivery_status"] = pd.Categorical(
-        plotly_df["delivery_status"],
-        categories=["On-time / early", "Late"],
-        ordered=True,
-    )
-    plotly_df = plotly_df.sort_values("delivery_status").reset_index(drop=True)
-
-    fig_plotly = px.bar(
-        plotly_df,
-        x="delivery_status",
-        y="avg_score",
-        color="delivery_status",
-        text="avg_score",
-        color_discrete_map={
-            "On-time / early": "#16A34A",
-            "Late":            "#DC2626",
-        },
-        labels={
-            "delivery_status":   "Delivery punctuality",
-            "avg_score":         "Average review score",
-        },
-        # Title intentionally removed per request.
-    )
-    fig_plotly.update_traces(
-        texttemplate="%{text:.2f} stars",
-        textposition="outside",
-    )
-    fig_plotly.update_layout(
-        yaxis=dict(range=[0, 5], dtick=1),
-        showlegend=False,
-        height=420,
-        margin=dict(l=10, r=10, t=10, b=10),
-    )
-    st.plotly_chart(fig_plotly, use_container_width=True)
-
-    score_by_label = plotly_df.set_index("delivery_status")["avg_score"]
-    if (
-        "On-time / early" in score_by_label.index
-        and "Late" in score_by_label.index
-    ):
-        gap = (
-            score_by_label["On-time / early"]
-            - score_by_label["Late"]
-        )
-        st.info(
-            f"Key finding: On-time/early deliveries average "
-            f"{score_by_label['On-time / early']:.2f} stars, compared with "
-            f"{score_by_label['Late']:.2f} stars for late deliveries — "
-            f"a difference of {gap:.2f} stars."
-        )
 
 
 # ── Delivery buckets ────────────────────────────────────────────────────
@@ -838,18 +771,17 @@ def chart_satisfaction_by_delivery_bucket(
     )
 
     palette_by_bucket = {
-        "0-5 days":   PALETTE.purple_dark,
-        "6-10 days":  PALETTE.purple,
-        "11-20 days": "#A78BFA",
-        "21-30 days": "#F0A0A0",
+        "0-5 days":   PALETTE.green_light,
+        "6-10 days":  PALETTE.green,
+        "11-20 days": PALETTE.yellow,
+        "21-30 days": PALETTE.orange,
         "30+ days":   PALETTE.red,
     }
-    colors = [palette_by_bucket.get(b, PALETTE.grey)
-              for b in df["delivery_bucket"]]
+    colors = [palette_by_bucket.get(b, PALETTE.grey) for b in df["delivery_bucket"]]
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(df["delivery_bucket"], df["avg_score"], color=colors)
-    ax.set_title("Satisfaction by Delivery-Time Bucket")
+    ax.set_title("Satisfaction by Delivery-Time Bucket", pad=15)
     ax.set_xlabel("Days from purchase to delivery")
     ax.set_ylabel("Avg review score (1–5)")
     ax.set_ylim(1, 5.4)
@@ -860,7 +792,7 @@ def chart_satisfaction_by_delivery_bucket(
         ax.text(bar.get_x() + bar.get_width() / 2, score + 0.06,
                 f"{score:.2f}\n(n={n:,})",
                 ha="center", va="bottom", fontsize=9,
-                color=PALETTE.purple_dark, fontweight="bold")
+                color=PALETTE.slate, fontweight="bold")
     st.pyplot(fig, use_container_width=True)
     plt.close(fig)
 
@@ -1009,15 +941,15 @@ def chart_brazil_map(
     if hi_c - lo_c < 1:
         hi_c = lo_c + 1
 
-    cmap = plt.get_cmap("YlGn")
+    # Classic Power BI style warm-to-cool mapping for density
+    cmap = plt.get_cmap("YlGnBu")
     norm = mpl.colors.Normalize(vmin=lo_c, vmax=hi_c)
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     ax.set_axis_off()
     ax.set_title(
         f"Delivered Orders by State — {scope_label(year, state_json)}",
-        fontsize=12, fontweight="bold", color=PALETTE.purple_dark,
-        pad=8,
+        fontsize=12, fontweight="bold", color=PALETTE.slate, pad=12,
     )
 
     for _, row in gdf.iterrows():
@@ -1083,8 +1015,7 @@ def chart_brazil_map(
         sm, ax=ax, orientation="horizontal",
         fraction=0.04, pad=0.04, shrink=0.7,
     )
-    cbar.set_label("Delivered orders", fontsize=9,
-                   color=PALETTE.purple_dark)
+    cbar.set_label("Delivered orders", fontsize=9, color=PALETTE.slate)
     cbar.ax.tick_params(labelsize=8)
 
     st.pyplot(fig, use_container_width=True)
@@ -1147,11 +1078,16 @@ def info_card(
 
 GLOBAL_CSS: Final[str] = """
 <style>
-  .stApp { background: linear-gradient(160deg, #EFE9F7 0%, #E8E1F2 100%); }
+  /* Power BI inspired vibrant background */
+  .stApp { 
+    background: linear-gradient(135deg, #F3F2F1 0%, #E1DFDD 100%);
+    color: #323130;
+  }
 
+  /* Sidebar styling */
   section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #6D3FB5 0%, #8B5CF6 100%);
-    border-right: none;
+    background: linear-gradient(180deg, #0078D7 0%, #005A9E 100%);
+    border-right: 2px solid #005A9E;
   }
   section[data-testid="stSidebar"] * { color: #FFFFFF !important; }
   section[data-testid="stSidebar"] h1,
@@ -1161,75 +1097,84 @@ GLOBAL_CSS: Final[str] = """
   }
   section[data-testid="stSidebar"] .stSelectbox label,
   section[data-testid="stSidebar"] .stMultiSelect label {
-    color: #EDE9FE !important; font-weight: 600;
+    color: #E1DFDD !important; font-weight: 600;
     text-transform: uppercase; font-size: 12px; letter-spacing: 0.06em;
   }
   section[data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.2) !important;
   }
 
-  h2, h3 { color: #4C1D95; letter-spacing: -0.01em; font-weight: 700; }
-  p, li, span, label { color: #3F3D56; }
-  .stCaption, [data-testid="stCaptionContainer"] { color: #6B7280; }
+  /* Typography */
+  h2, h3 { color: #323130; letter-spacing: -0.01em; font-weight: 700; }
+  p, li, span, label { color: #323130; }
+  .stCaption, [data-testid="stCaptionContainer"] { color: #605E5C; }
 
+  /* Metric Cards - Classic Power BI Style */
   [data-testid="stMetric"] {
     background-color: #FFFFFF;
-    border: 1px solid #E5DEF7;
-    border-top: 4px solid #8B5CF6;
-    border-radius: 12px; padding: 16px 18px;
-    box-shadow: 0 4px 14px rgba(109, 63, 181, 0.08);
+    border: 1px solid #E1DFDD;
+    border-left: 6px solid #0078D7;
+    border-radius: 4px; padding: 16px 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
   }
   [data-testid="stMetricLabel"] {
-    color: #6D3FB5; font-size: 12px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: 0.06em;
+    color: #605E5C; font-size: 13px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em;
   }
   [data-testid="stMetricValue"] {
-    color: #1F2937; font-weight: 700; font-size: 28px;
+    color: #323130; font-weight: 800; font-size: 28px;
   }
 
+  /* Tabs */
   button[data-baseweb="tab"] {
-    color: #6B7280; font-weight: 600; font-size: 14px;
+    color: #605E5C; font-weight: 600; font-size: 15px;
   }
   button[data-baseweb="tab"][aria-selected="true"] {
-    color: #6D3FB5; border-bottom-color: #8B5CF6;
+    color: #0078D7; border-bottom-color: #0078D7;
     border-bottom-width: 3px;
   }
 
-  hr { border-color: #E5DEF7; }
+  /* General Elements */
+  hr { border-color: #E1DFDD; }
   [data-testid="stAlert"] {
-    background-color: #F5F0FF;
-    border-left: 4px solid #8B5CF6;
-    color: #4C1D95;
+    background-color: #FFF4CE;
+    border-left: 4px solid #FFB900;
+    color: #323130;
   }
   code {
-    background-color: #F5F0FF; color: #6D3FB5;
+    background-color: #F3F2F1; color: #D13438;
     padding: 2px 6px; border-radius: 4px;
   }
 
+  /* Info Cards for Limitations & Recommendations */
   .info-card {
-    background: #FFFFFF; border: 1px solid #E5DEF7;
-    border-left: 5px solid #8B5CF6; border-radius: 10px;
+    background: #FFFFFF; border: 1px solid #E1DFDD;
+    border-left: 6px solid #0078D7; border-radius: 4px;
     padding: 18px 22px; margin-bottom: 16px;
-    box-shadow: 0 3px 12px rgba(109, 63, 181, 0.08);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
   }
-  .info-card.warn { border-left-color: #D64545; }
-  .info-card.ok   { border-left-color: #16A34A; }
-  .info-card.info { border-left-color: #0EA5E9; }
+  .info-card.warn { border-left-color: #D13438; }
+  .info-card.ok   { border-left-color: #107C10; }
+  .info-card.info { border-left-color: #00B7C3; }
   .info-card h4 {
-    color: #4C1D95; margin-top: 0; margin-bottom: 8px; font-size: 16px;
+    color: #0078D7; margin-top: 0; margin-bottom: 8px; font-size: 17px;
+    font-weight: 700;
   }
-  .info-card p, .info-card li { color: #3F3D56; line-height: 1.7; }
+  .info-card.warn h4 { color: #D13438; }
+  .info-card.ok h4   { color: #107C10; }
+  .info-card.info h4 { color: #00B7C3; }
+  
+  .info-card p, .info-card li { color: #323130; line-height: 1.6; }
   .info-card .tag {
-    display: inline-block; background: #F5F0FF; color: #6D3FB5;
-    border-radius: 6px; padding: 2px 10px; font-size: 12px;
+    display: inline-block; background: #F3F2F1; color: #605E5C;
+    border-radius: 12px; padding: 4px 12px; font-size: 12px;
     font-weight: 700; margin-right: 6px; margin-bottom: 6px;
   }
 
   .scope-pill {
-    display: inline-block; background: #FFFFFF; color: #6D3FB5;
-    border: 1px solid #C4B5FD; border-radius: 16px;
-    padding: 3px 12px; font-size: 12px; font-weight: 700;
-    margin-bottom: 6px;
+    display: inline-block; background: #0078D7; color: #FFFFFF;
+    border-radius: 16px; padding: 4px 14px; font-size: 13px; 
+    font-weight: 700; margin-bottom: 6px;
   }
 </style>
 """
@@ -1241,28 +1186,28 @@ def _apply_global_style() -> None:
         "figure.facecolor":   "#FFFFFF",
         "axes.facecolor":     "#FFFFFF",
         "axes.grid":          True,
-        "grid.color":         "#EDE7FA",
-        "grid.linewidth":     0.9,
+        "grid.color":         "#EDEBE9",
+        "grid.linewidth":     0.8,
         "axes.spines.top":    False,
         "axes.spines.right":  False,
         "axes.spines.left":   False,
         "axes.spines.bottom": True,
-        "axes.edgecolor":     "#D8CDF0",
+        "axes.edgecolor":     "#E1DFDD",
         "axes.linewidth":     0.9,
         "font.family":        "sans-serif",
         "font.size":          10,
-        "axes.titlesize":     12,
+        "axes.titlesize":     13,
         "axes.titleweight":   "bold",
-        "axes.titlecolor":    "#4C1D95",
-        "axes.titlelocation": "center",
-        "axes.labelsize":     9,
-        "axes.labelcolor":    "#6B7280",
-        "xtick.color":        "#6B7280",
-        "ytick.color":        "#6B7280",
-        "xtick.labelsize":    8,
-        "ytick.labelsize":    8,
+        "axes.titlecolor":    "#323130",
+        "axes.titlelocation": "left", # Power BI usually left-aligns titles
+        "axes.labelsize":     10,
+        "axes.labelcolor":    "#605E5C",
+        "xtick.color":        "#605E5C",
+        "ytick.color":        "#605E5C",
+        "xtick.labelsize":    9,
+        "ytick.labelsize":    9,
         "legend.frameon":     False,
-        "legend.fontsize":    8,
+        "legend.fontsize":    9,
     })
 
 
@@ -1623,15 +1568,11 @@ def main() -> None:
     st.markdown(
         """
         <h1 style="
-            background: linear-gradient(90deg, #6D3FB5 0%, #8B5CF6 50%, #D64545 100%);
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-            background-clip: text; font-size: 40px; font-weight: 800;
-            letter-spacing: -0.02em; text-align: center;
-            margin-bottom: 0; padding-bottom: 0;">
+            color: #323130; font-size: 32px; font-weight: 800;
+            letter-spacing: -0.02em; margin-bottom: 4px; padding-bottom: 0;">
           Customer Satisfaction Dashboard
         </h1>
-        <p style='color:#6B7280; font-size:14px; margin-top:4px;
-                  text-align:center;'>
+        <p style='color:#605E5C; font-size:14px; margin-top:0;'>
           PORA Academy Cohort 7 — Group 1 Capstone Project
         </p>
         """,
@@ -1641,6 +1582,8 @@ def main() -> None:
         f'<span class="scope-pill">Scope: {scope_label(year, state_json)}</span>',
         unsafe_allow_html=True,
     )
+    
+    st.write("") # spacer
 
     (
         tab_overview,
