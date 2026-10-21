@@ -893,10 +893,10 @@ def _plot_geojson_state(
 def chart_brazil_map(
     conn: sqlite3.Connection, year: str, state_json: str
 ) -> None:
-    """Chart · Brazil Map · Delivered Orders (complete) — all 27 states
+    """Chart · Brazil Map · Delivered Orders — all 27 states
     are always rendered. States not in the current filter are shown in
     light grey but remain visible."""
-    st.markdown("### Brazil Map · Delivered Orders *(complete)*")
+    st.markdown("### Brazil Map · Delivered Orders")
 
     df = safe_query(conn, f"""
         SELECT c.customer_state AS state,
