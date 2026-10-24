@@ -617,11 +617,22 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("### Average Review Score by State *(top 10)*")
+    """Average Review Score by State (top 10 by orders).
+
+    Fully filter-aware:
+      • Respects the **Year** filter (via apply_filters).
+      • Respects the **State** multiselect: when states are selected,
+        only those states are considered and the top-10 cap collapses to
+        the number of selected states.
+      • Re-ranks by order volume within the filtered slice, so the
+        "top 10" is the top 10 of the *current selection*, not of the
+        whole dataset.
+    """
     df = apply_filters(get_model(), year, list(states))
     df = df[df["review_score"].notna() & df["customer_state"].notna()]
 
     if df.empty:
+        st.markdown("### Average Review Score by State *(top 10)*")
         _no_data()
         return
 
@@ -629,6 +640,13 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
         orders=("order_id", "nunique"),
         avg_score=("review_score", "mean"),
     ).reset_index().sort_values("orders", ascending=False).head(10)
+
+    n_states = len(grp)
+    title_cap = "top 10" if n_states >= 10 else f"{n_states} state{'s' if n_states != 1 else ''}"
+    scope_txt = "by orders"
+    if states:
+        scope_txt = "in current selection"
+    st.markdown(f"### Average Review Score by State *({title_cap} {scope_txt})*")
 
     plot_df = grp.sort_values("avg_score", ascending=True)
     colors = [
@@ -641,8 +659,10 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.barh(plot_df["customer_state"], plot_df["avg_score"],
                    color=colors, edgecolor=PALETTE.white, linewidth=1.2)
-    ax.set_title("Average Review Score by State (top 10 by orders)",
-                 pad=14, loc="left")
+    ax.set_title(
+        f"Average Review Score by State ({title_cap} {scope_txt})",
+        pad=14, loc="left",
+    )
     ax.set_xlabel("Average review score (1–5)")
     ax.set_xlim(0, 5.4)
     _style_axes(ax)
@@ -993,47 +1013,36 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
 def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
     """Hero banner — Customer Satisfaction tab.
 
-    Uses the SAME typography (14px body, 20px icon, small-caps label)
-    as the Overview headline strip; the hero still feels primary via its
-    gradient background and left border accent.
+    Single consolidated paragraph combining the former headline and
+    sub-line, keeping the same typography as the Overview strip.
     """
     g = query_headline_gap(year, states)
+    scope = scope_label(year, states)
+
     if g["gap"] is None:
-        st.markdown(
-            """
-            <div class="hero-banner">
-              <div class="hero-icon">📊</div>
-              <div class="hero-text">
-                <span class="hero-label">Headline finding</span>
-                <p class="hero-headline">
-                  Delivery punctuality is the strongest satisfaction driver
-                  in this dataset.
-                </p>
-                <p class="hero-sub">
-                  Only one delivery status appears in the current selection —
-                  widen the filters to compare on-time and late orders.
-                </p>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        body = (
+            "Delivery punctuality is the strongest satisfaction driver "
+            "in this dataset. Only one delivery status appears in the "
+            "current selection — widen the filters to compare on-time "
+            "and late orders."
         )
-        return
+    else:
+        body = (
+            f'Late deliveries cost <b>{g["gap"]:.2f} stars</b> — '
+            f'the single strongest satisfaction driver. '
+            f'On-time orders average <b>{g["on_time"]:.2f} stars</b>; '
+            f'late orders average <b>{g["late"]:.2f} stars</b>. '
+            f'This gap dwarfs every state-level difference.'
+        )
 
     st.markdown(
         f"""
         <div class="hero-banner">
           <div class="hero-icon">⚡</div>
           <div class="hero-text">
-            <span class="hero-label">Headline finding · {scope_label(year, states)}</span>
+            <span class="hero-label">Headline finding · {scope}</span>
             <p class="hero-headline">
-              Late deliveries cost <b>{g["gap"]:.2f} stars</b>
-              — the single strongest satisfaction driver.
-            </p>
-            <p class="hero-sub">
-              On-time orders average <b>{g["on_time"]:.2f}</b> stars;
-              late orders average <b>{g["late"]:.2f}</b> stars.
-              This gap dwarfs every state-level difference.
+              {body}
             </p>
           </div>
         </div>
@@ -1391,14 +1400,6 @@ GLOBAL_CSS: Final[str] = """
     color: var(--brand-dark);
     font-weight: 700;
   }
-
-  .hero-banner .hero-sub {
-    font-size: 14px;
-    color: var(--slate-700);
-    line-height: 1.55;
-    margin: var(--s1) 0 0 0;
-  }
-  .hero-banner .hero-sub b { color: var(--ink-soft); font-weight: 700; }
 
   /* Partial year banner */
   .overview-banner {
