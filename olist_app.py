@@ -8,7 +8,7 @@ Professional, decision-first dashboard.
   · Navigation tabs in the sidebar · cached pandas layer
   · Advanced punctuality module (severity tiers, CI, what-if)
   · Streamlit Cloud ready · version-safe API shims
-  · PORA Academy logo integrated in the hero header
+  · PORA Academy logo integrated as embedded Base64
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
@@ -18,7 +18,6 @@ Optional: scipy (statistical CI), plotly (interactive matrix)
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import logging
 import os
@@ -43,9 +42,6 @@ PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
 PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
-
-# Public URL fallback for the logo
-PORA_LOGO_URL: Final[str] = "https://i.ibb.co/3W1zS7v/pora-logo.png"
 
 REF = {
     "total_orders":      99_441,
@@ -72,6 +68,7 @@ class Palette:
     success_light: str = "#6EE7B7"
     warn:          str = "#F59E0B"
     warn_light:    str = "#FCD34D"
+    warn_text:     str = "#B45309"  # Darker amber for accessible text
     danger:        str = "#E11D48"
     danger_light:  str = "#FDA4AF"
 
@@ -176,22 +173,13 @@ def _st_plotly(fig) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §2.y  LOGO HELPER
+# §2.y  LOGO HELPER (Embedded Base64)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _get_logo_base64() -> str:
-    """Attempts to load a local logo, falls back to the public URL."""
-    # Check for a local file first
-    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pora_logo.png")
-    if os.path.isfile(local_path):
-        try:
-            with open(local_path, "rb") as f:
-                return base64.b64encode(f.read()).decode()
-        except Exception:
-            pass  # Fall through to URL
-    
-    # Fallback: return the URL directly (browser will fetch it)
-    return PORA_LOGO_URL
+    """Returns the PORA Academy logo as an embedded Base64 string."""
+    # Embedded directly to guarantee rendering on Streamlit Cloud without files.
+    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAYAAABW1v8xAAAACXBIWXMAAAsTAAALEwEAmpwYAAAF8WlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgOS4xLWMwMDEgNzkuYjcxYjQ1MiA3OS4xYjcxYjQ1MiwgMjAyMi8wOS8xNC0wMDozOTo0NiAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI0LjAgKFdpbmRvd3MpIiB4bXA6Q3JlYXRlRGF0ZT0iMjAyMy0wMS0xMVQxMTo1ODo0MSswMTowMCIgeG1wOk1vZGlmeURhdGU9IjIwMjMtMDEtMTFUMTE6NTg6NDErMDE6MDAiIHhtcDpNZXRhZGF0YURhdGU9IjIwMjMtMDEtMTFUMTE6NTg6NDErMDE6MDAiIGRjOmZvcm1hdD0iaW1hZ2UvcG5nIiBwaG90b3Nob3A6Q29sb3JNb2RlPSIzIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOmQ3M2YyZTIyLWM0M2YtNDQyZS1hZmI5LTVjY2Q2M2Y5MmY4ZiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDpkNzNmMmUyMi1jNDNmLTQ0MmUtYWZiOS01Y2NkNjNmOTJmOGYiIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDpkNzNmMmUyMi1jNDNmLTQ0MmUtYWZiOS01Y2NkNjNmOTJmOGYiPiA8eG1wTU06SGlzdG9yeT4gPHJkZjpTZXE+IDxyZGY6bGkgc3RFdnQ6YWN0aW9uPSJjcmVhdGVkIiBzdEV2dDppbnN0YW5jZUlEPSJ4bXAuaWlkOmQ3M2YyZTIyLWM0M2YtNDQyZS1hZmI5LTVjY2Q2M2Y5MmY4ZiIgc3RFdnQ6d2hlbj0iMjAyMy0wMS0xMVQxMTo1ODo0MSswMTowMCIgc3RFdnQ6c29mdHdhcmVBZ2VudD0iQWRvYmUgUGhvdG9zaG9wIDI0LjAgKFdpbmRvd3MpIi8+IDwvcmRmOlNlcT4gPC94bXBNTTpIaXN0b3J5PiA8L3JkZjpEZXNjcmlwdGlvbj4gPC9yZGY6UkRGPiA8L3g6eG1wbWV0YT4gPD94cGFja2V0IGVuZD0iciI/PgH//v38+/r5+Pf29fTz8vHw7+7t7Ovq6ejn5uXk4+Lh4N/e3dzb2tnY19bV1NPS0dDPzs3My8rJyMfGxcTDwsHAv769vLu6ubi3trW0s7KxsK+urayrqqmop6alpKOioaCfnp2cm5qZmJeWlZSTkpGQj46NjIuKiYiHhoWEg4KBgH9+fXx7enl4d3Z1dHNycXBvbm1sa2ppaGdmZWRjYmFgX15dXFtaWVhXVlVUU1JRUE9OTUxLSklIR0ZFRENCQUA/Pj08Ozo5ODc2NTQzMjEwLy4tLCsqKSgnJiUkIyIhIB8eHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgEAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -500,10 +488,12 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
     total = int(counts.sum())
     pct = 100.0 * counts / total
 
+    # Highlight partial years with a distinct warning color
     colors = [
         PALETTE.warn if y in PARTIAL_YEARS else PALETTE.primary
         for y in counts.index
     ]
+    
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.barh(counts.index.astype(str), counts.values, color=colors,
                    edgecolor=PALETTE.white, linewidth=1.4)
@@ -514,15 +504,30 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
     _style_axes(ax)
     ax.grid(axis="x", color=PALETTE.slate_200, linewidth=0.7)
     ax.grid(axis="y", visible=False)
+    
     for b, n, p, y in zip(bars, counts.values, pct.values, counts.index):
-        label = f"{p:.1f}%  ({int(n):,})" + (
-            "  ⚠️" if y in PARTIAL_YEARS else ""
-        )
+        if y in PARTIAL_YEARS:
+            # High-visibility label for partial years
+            label = f"⚠️ PARTIAL YEAR\n{p:.1f}% ({int(n):,})"
+            text_color = PALETTE.danger
+        else:
+            label = f"{p:.1f}%  ({int(n):,})"
+            text_color = PALETTE.slate_700
+            
         ax.text(b.get_width() + total * 0.01,
                 b.get_y() + b.get_height() / 2, label,
-                va="center", fontsize=11, color=PALETTE.slate_700,
+                va="center", fontsize=10, color=text_color,
                 fontweight="bold")
+                
     _finish(fig)
+
+    # Always show this caption if partial years exist in the dataset view
+    if any(y in PARTIAL_YEARS for y in counts.index):
+        st.caption(
+            "⚠️ **Note on 2016 and 2018:** 2016 only contains 3 active months "
+            "(Sep–Dec) and 2018 ends on 17 October. These are **not full calendar years**, "
+            "so their review volume appears artificially low."
+        )
 
     biggest = counts.idxmax()
     smallest = counts.idxmin()
@@ -2487,11 +2492,12 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    # 1. Mobile Optimization: Sidebar collapses automatically on small screens
     st.set_page_config(
         page_title="Customer Satisfaction · Olist",
         page_icon="📊",
         layout="wide",
-        initial_sidebar_state="expanded",
+        initial_sidebar_state="auto", 
         menu_items={
             "About": (
                 "**Customer Satisfaction Dashboard**  \n"
@@ -2520,7 +2526,7 @@ def main() -> None:
     active_tab, year, states = render_sidebar()
     k_live = query_kpis(year, states)
 
-    # ── Hero header (with Logo) ─────────────────────────────────────────
+    # 2. Logo Integrated (Embedded Base64)
     logo_src = _get_logo_base64()
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
