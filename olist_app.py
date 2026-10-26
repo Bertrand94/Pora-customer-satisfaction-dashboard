@@ -9,6 +9,7 @@ layer · lazy tab rendering · narrative-ordered charts · Streamlit Cloud ready
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
 Requires: streamlit, pandas, matplotlib, requests
+Optional: scipy (enables statistical CI in the advanced punctuality chart)
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ from matplotlib.ticker import FuncFormatter
 
 CHART_FIGSIZE: Final[tuple[float, float]] = (8.2, 4.6)
 PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
+
+# Advanced punctuality-chart tunables
+PUNCT_MIN_N_TIER:   Final[int] = 30
+PUNCT_MIN_N_STATUS: Final[int] = 30
+PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
 
 REF = {
     "total_orders":      99_441,
@@ -471,75 +477,289 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
              f"{pct[smallest]:.1f}%).")
 
 
-def chart_punctuality_vs_satisfaction(year: str,
-                                      states: tuple[str, ...]) -> None:
-    st.markdown("### Delivery Punctuality vs Satisfaction")
-    df = apply_filters(get_model(), year, list(states))
+# ════════════════════════════════════════════════════════════════════════════
+# §6.x  ADVANCED — Delivery Punctuality vs Satisfaction
+#       Severity tiers · effect size · business projection · sensitivity
+# ════════════════════════════════════════════════════════════════════════════
+
+def _late_severity(days_late: pd.Series) -> pd.Series:
+    """Map days-late (delivered − estimated) to a 4-level severity tier."""
+    out = pd.Series("On Time", index=days_late.index, dtype="object")
+    out = out.mask(days_late.between(1, 3), "Slightly Late")
+    out = out.mask(days_late.between(4, 7), "Moderately Late")
+    out = out.mask(days_late >= 8, "Severely Late")
+    return out
+
+
+@st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
+def _punctuality_frame(year: str,
+                       states_tuple: tuple[str, ...]) -> pd.DataFrame:
+    """Cached, filter-aware frame enriched with lateness severity + flags."""
+    df = apply_filters(get_model(), year, list(states_tuple))
     df = df[df["is_delivered"] & df["review_score"].notna()].copy()
     if df.empty:
-        _no_data()
+        return df
+
+    df["days_late"] = (
+        df["order_delivered_customer_date"]
+        - df["order_estimated_delivery_date"]
+    ).dt.days
+    df = df[df["days_late"].notna()]
+    if df.empty:
+        return df
+
+    df["severity"] = _late_severity(df["days_late"])
+    df["is_detractor"] = df["review_score"].le(2)
+    df["is_promoter"]  = df["review_score"].ge(4)
+    return df
+
+
+def _welch_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05
+              ) -> tuple[float, float, float, float, float]:
+    """Welch t-test + 95% CI on (mean a − mean b) and Cohen's d.
+
+    Returns (diff, ci_low, ci_high, t_stat, cohens_d). If scipy is
+    unavailable, stats fields are NaN but `diff` is still returned.
+    """
+    import numpy as np
+    na, nb = len(a), len(b)
+    diff = float(a.mean() - b.mean()) if na and nb else float("nan")
+    if na < 2 or nb < 2:
+        return diff, float("nan"), float("nan"), float("nan"), float("nan")
+
+    try:
+        from scipy import stats  # optional
+        t, _p = stats.ttest_ind(a, b, equal_var=False, nan_policy="omit")
+        va, vb = float(a.var(ddof=1)), float(b.var(ddof=1))
+        se = float(np.sqrt(va / na + vb / nb))
+        denom = ((va / na) ** 2 / (na - 1)
+                 + (vb / nb) ** 2 / (nb - 1))
+        df_w = (va / na + vb / nb) ** 2 / denom if denom > 0 else float("nan")
+        tcrit = (float(stats.t.ppf(1 - alpha / 2, df_w))
+                 if df_w == df_w else float("nan"))
+        ci_low, ci_high = diff - tcrit * se, diff + tcrit * se
+        pooled = float(
+            np.sqrt(((na - 1) * va + (nb - 1) * vb) / (na + nb - 2))
+        ) if (na + nb - 2) > 0 else float("nan")
+        d = diff / pooled if pooled and pooled > 0 else float("nan")
+        return diff, ci_low, ci_high, float(t), float(d)
+    except Exception:
+        return diff, float("nan"), float("nan"), float("nan"), float("nan")
+
+
+def _cohens_verdict(d: float) -> str:
+    if d != d:
+        return "n/a"
+    a = abs(d)
+    if a < 0.2: return "negligible"
+    if a < 0.5: return "small"
+    if a < 0.8: return "medium"
+    return "large"
+
+
+def chart_punctuality_vs_satisfaction(year: str,
+                                      states: tuple[str, ...]) -> None:
+    """ADVANCED: severity-aware punctuality → satisfaction analysis.
+
+    Panels
+    ------
+    1. Mean score by severity tier (left)
+    2. 1–2★ detractor share by severity tier (right)
+    3. Statistical verdict (Welch CI + Cohen's d on On-Time − Late)
+    4. Business-impact projection table (X% late→on-time scenarios)
+    """
+    st.markdown("### Delivery Punctuality vs Satisfaction")
+    st.caption(
+        "Severity-tiered dose-response, statistical confidence, and "
+        "operational upside — the decision-grade version of the on-time/late gap."
+    )
+
+    df = _punctuality_frame(year, states)
+    if df.empty:
+        _no_data("No delivered orders with both a delivery date and a review.")
         return
 
-    df["status"] = df["is_late"].map({True: "Late", False: "On Time"})
-    grp = df.groupby("status").agg(
-        orders=("order_id", "nunique"),
-        avg_score=("review_score", "mean"),
-        avg_days=("delivery_days", "mean"),
-    ).reset_index().sort_values("avg_score", ascending=False)
+    tier_order = ["On Time", "Slightly Late", "Moderately Late", "Severely Late"]
+    grp = (
+        df.groupby("severity", observed=False)
+          .agg(
+              orders=("order_id", "nunique"),
+              avg_score=("review_score", "mean"),
+              detractor_rate=("is_detractor", "mean"),
+              avg_days_late=("days_late", "mean"),
+          )
+          .reindex(tier_order)
+          .dropna(subset=["orders"])
+    )
+    if grp.empty:
+        _no_data()
+        return
+    grp["reliable"] = grp["orders"] >= PUNCT_MIN_N_TIER
 
-    color_map = {"On Time": PALETTE.success, "Late": PALETTE.danger}
-    colors = [color_map.get(s, PALETTE.slate_400) for s in grp["status"]]
+    tier_colors = {
+        "On Time":         PALETTE.success,
+        "Slightly Late":   PALETTE.warn_light,
+        "Moderately Late": PALETTE.warn,
+        "Severely Late":   PALETTE.danger,
+    }
+    colors = [tier_colors.get(str(t), PALETTE.slate_400) for t in grp.index]
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
-    bars = ax.bar(grp["status"], grp["avg_score"], color=colors,
-                  edgecolor=PALETTE.white, linewidth=1.2, width=0.55)
-    ax.set_title("Delivery Punctuality vs Satisfaction",
-                 pad=14, loc="left")
-    ax.set_ylabel("Avg review score (1–5)")
-    ax.set_ylim(1, 5.6)
-    _style_axes(ax)
-    for b, s, n, d in zip(bars, grp["avg_score"], grp["orders"],
-                          grp["avg_days"]):
-        d_txt = f"{d:.1f}d" if pd.notna(d) else "—"
-        ax.text(b.get_x() + b.get_width() / 2, s + 0.08,
-                f"{s:.2f}\n(n={int(n):,}; {d_txt} avg)",
-                ha="center", va="bottom", fontsize=11,
-                color=PALETTE.slate_700, fontweight="bold")
+    # ── Dual-panel figure ────────────────────────────────────────────────
+    fig, axes = plt.subplots(
+        1, 2,
+        figsize=(CHART_FIGSIZE[0], CHART_FIGSIZE[1] * 0.95),
+        gridspec_kw={"wspace": 0.30},
+    )
+    ax1, ax2 = axes
 
-    scores = dict(zip(grp["status"], grp["avg_score"]))
-    if {"On Time", "Late"} <= scores.keys():
-        on, late = scores["On Time"], scores["Late"]
-        gap = on - late
-        ax.annotate("", xy=(1, late + 0.1), xytext=(1, on - 0.1),
-                    arrowprops=dict(arrowstyle="<->",
-                                    color=PALETTE.primary, lw=2.2))
-        ax.text(1.18, (on + late) / 2, f"Δ {gap:.2f}★",
-                ha="left", va="center", fontsize=14,
-                color=PALETTE.primary, fontweight="bold")
+    # --- Left: mean score ----------------------------------------------
+    bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.2,
+                    width=0.62)
+    ax1.set_title("Mean score by lateness severity", pad=10, loc="left",
+                  fontsize=12)
+    ax1.set_ylabel("Avg review score (1–5)")
+    ax1.set_ylim(1, 5.4)
+    _style_axes(ax1)
+
+    for b, s, n, reliable in zip(bars1, grp["avg_score"], grp["orders"],
+                                 grp["reliable"]):
+        label = f"{s:.2f}\nn={int(n):,}"
+        if not reliable:
+            label += " ⚠️"
+        ax1.text(b.get_x() + b.get_width() / 2, s + 0.07,
+                 label, ha="center", va="bottom", fontsize=9,
+                 color=PALETTE.slate_700, fontweight="bold")
+
+    sel_avg = float(df["review_score"].mean())
+    ax1.axhline(sel_avg, color=PALETTE.slate_500, linestyle="--",
+                linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
+    ax1.legend(loc="lower left", frameon=False, fontsize=9)
+
+    # --- Right: detractor rate -----------------------------------------
+    ymax = max(5.0, float((grp["detractor_rate"] * 100).max()) * 1.25)
+    bars2 = ax2.bar(grp.index.astype(str), grp["detractor_rate"] * 100,
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.2,
+                    width=0.62)
+    ax2.set_title("1–2★ detractor share by severity", pad=10, loc="left",
+                  fontsize=12)
+    ax2.set_ylabel("% of reviews that are 1–2★")
+    ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
+    ax2.set_ylim(0, ymax)
+    _style_axes(ax2)
+    for b, p, reliable in zip(bars2, grp["detractor_rate"] * 100,
+                              grp["reliable"]):
+        label = f"{p:.1f}%"
+        if not reliable:
+            label += " ⚠️"
+        ax2.text(b.get_x() + b.get_width() / 2, p + ymax * 0.02,
+                 label, ha="center", va="bottom", fontsize=9,
+                 color=PALETTE.slate_700, fontweight="bold")
+
     _finish(fig)
 
-    if {"On Time", "Late"} <= scores.keys():
-        gap = scores["On Time"] - scores["Late"]
-        on_time_orders = int(
-            grp.loc[grp["status"] == "On Time", "orders"].iloc[0]
+    # ── Statistical verdict ──────────────────────────────────────────────
+    on_time_scores = df.loc[df["severity"] == "On Time", "review_score"]
+    late_scores    = df.loc[df["severity"] != "On Time", "review_score"]
+    n_on, n_late = len(on_time_scores), len(late_scores)
+
+    if n_on >= PUNCT_MIN_N_STATUS and n_late >= PUNCT_MIN_N_STATUS:
+        diff, ci_lo, ci_hi, t_stat, d = _welch_ci(on_time_scores, late_scores)
+        robust = (
+            ci_lo == ci_lo and ci_hi == ci_hi and ci_lo > 0
         )
-        late_orders = int(
-            grp.loc[grp["status"] == "Late", "orders"].iloc[0]
-        )
-        _insight(
-            year, states,
-            f"On-time orders ({on_time_orders:,}) average "
-            f"{scores['On Time']:.2f}★; late orders ({late_orders:,}) "
-            f"average {scores['Late']:.2f}★ — a gap of {gap:.2f}★, "
-            f"the largest single driver in this dataset.",
+        sig = "✅ statistically robust" if robust else \
+              "⚠️ CI includes 0 — inconclusive"
+        d_txt = (f"{d:.2f} ({_cohens_verdict(d)})"
+                 if d == d else "n/a (scipy unavailable)")
+        ci_txt = (f"[{ci_lo:+.2f}, {ci_hi:+.2f}]"
+                  if ci_lo == ci_lo else "n/a")
+        verdict = (
+            f"<b>On-Time − Late gap: {diff:+.2f}★</b> "
+            f"(95% CI {ci_txt}) · Welch t = "
+            f"{t_stat:.2f} · Cohen's d = {d_txt} · "
+            f"n_on={n_on:,}, n_late={n_late:,} · {sig}"
         )
     else:
-        only = next(iter(scores))
+        verdict = (
+            f"<b>Insufficient sample for a statistical test.</b> "
+            f"On-time n={n_on:,}, late n={n_late:,}; need ≥ "
+            f"{PUNCT_MIN_N_STATUS} each. Widen the Year or State filters."
+        )
+    st.markdown(
+        f"""
+        <div class="insight" style="border-left-color:{PALETTE.primary};">
+          <span class="insight-scope">Statistical verdict</span>
+          <span class="insight-text">{verdict}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Business-impact projection ───────────────────────────────────────
+    if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
+        on_mean = float(on_time_scores.mean())
+        late_mean = float(late_scores.mean())
+        new_total = n_on + n_late
+
+        scen_rows = []
+        for pct in PUNCT_SCENARIOS:
+            converted = n_late * pct / 100.0
+            new_mean = (
+                n_on * on_mean
+                + (n_late - converted) * late_mean
+                + converted * on_mean
+            ) / new_total
+            scen_rows.append({
+                "Scenario":           f"{pct}% of late → on-time",
+                "Late orders fixed":  f"{converted:,.0f}",
+                "Expected avg score": f"{new_mean:.3f}",
+                "Δ vs current":       f"{new_mean - sel_avg:+.3f}★",
+            })
+        st.markdown("**Business-impact projection** *(ceteris paribus)*")
+        st.dataframe(pd.DataFrame(scen_rows),
+                     hide_index=True, width="stretch")
+        lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
+        st.caption(
+            f"Assumes converted orders land at the on-time mean "
+            f"({on_mean:.2f}★). Stars gained per 1% of late orders "
+            f"converted = **{lift_1pct:+.4f}★**."
+        )
+
+    # ── Insight line (preserves existing contract) ───────────────────────
+    if len(grp) > 1:
+        worst = grp["avg_score"].idxmin()
+        best  = grp["avg_score"].idxmax()
+        gap_ot_late = (
+            float(on_time_scores.mean() - late_scores.mean())
+            if n_on and n_late else float("nan")
+        )
+        noisy = int((~grp["reliable"]).sum())
+        noisy_txt = (
+            f" {noisy} tier(s) flagged ⚠️ (n < {PUNCT_MIN_N_TIER})."
+            if noisy else ""
+        )
+        top_det = grp["detractor_rate"].idxmax()
         _insight(
             year, states,
-            f"Only {only.lower()} orders in this selection — no on-time "
-            f"vs late gap can be computed.",
+            f"Score drops from {best} ({grp.loc[best,'avg_score']:.2f}) to "
+            f"{worst} ({grp.loc[worst,'avg_score']:.2f}); on-time vs late "
+            f"gap = {gap_ot_late:.2f}★. Detractor share rises "
+            f"{grp.loc['On Time','detractor_rate']*100:.1f}% → "
+            f"{grp.loc[top_det,'detractor_rate']*100:.1f}% as lateness "
+            f"worsens.{noisy_txt}"
         )
+    else:
+        only = grp.index[0]
+        _insight(
+            year, states,
+            f"Only the '{only}' tier is populated in this selection "
+            f"({grp.iloc[0]['avg_score']:.2f}★, "
+            f"n={int(grp.iloc[0]['orders']):,}) — no on-time vs late "
+            "comparison is possible."
+        )
+
+    _partial_note(year)
 
 
 def chart_satisfaction_by_delivery_bucket(year: str,
@@ -617,17 +837,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
-    """Average Review Score by State (top 10 by orders).
-
-    Fully filter-aware:
-      • Respects the **Year** filter (via apply_filters).
-      • Respects the **State** multiselect: when states are selected,
-        only those states are considered and the top-10 cap collapses to
-        the number of selected states.
-      • Re-ranks by order volume within the filtered slice, so the
-        "top 10" is the top 10 of the *current selection*, not of the
-        whole dataset.
-    """
+    """Average Review Score by State (top 10 by orders). Filter-aware."""
     df = apply_filters(get_model(), year, list(states))
     df = df[df["review_score"].notna() & df["customer_state"].notna()]
 
@@ -642,10 +852,9 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
     ).reset_index().sort_values("orders", ascending=False).head(10)
 
     n_states = len(grp)
-    title_cap = "top 10" if n_states >= 10 else f"{n_states} state{'s' if n_states != 1 else ''}"
-    scope_txt = "by orders"
-    if states:
-        scope_txt = "in current selection"
+    title_cap = ("top 10" if n_states >= 10
+                 else f"{n_states} state{'s' if n_states != 1 else ''}")
+    scope_txt = "in current selection" if states else "by orders"
     st.markdown(f"### Average Review Score by State *({title_cap} {scope_txt})*")
 
     plot_df = grp.sort_values("avg_score", ascending=True)
@@ -1011,11 +1220,6 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
 
 
 def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
-    """Hero banner — Customer Satisfaction tab.
-
-    Single consolidated paragraph combining the former headline and
-    sub-line, keeping the same typography as the Overview strip.
-    """
     g = query_headline_gap(year, states)
     scope = scope_label(year, states)
 
@@ -1052,11 +1256,6 @@ def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
 
 
 def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
-    """Compact headline strip — Overview tab.
-
-    Identical typography to the Customer Satisfaction hero: 14px body,
-    20px icon, small-caps label, same padding rhythm.
-    """
     g = query_headline_gap(year, states)
     if g["gap"] is None:
         return
@@ -1520,13 +1719,10 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
         "Set both to *All* to reproduce the reference values."
     )
 
-    # ── Reset callback (defined BEFORE widgets — runs before next rerun) ──
     def _reset_filters() -> None:
-        # Safe: callbacks run before widgets are instantiated on next rerun.
         st.session_state["filter_year"] = "All"
         st.session_state["filter_states"] = []
 
-    # ── Year selector ──────────────────────────────────────────────────────
     year = st.sidebar.selectbox(
         "Reporting Year", CONFIG.years, index=0, key="filter_year",
     )
@@ -1541,7 +1737,6 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
             unsafe_allow_html=True,
         )
 
-    # ── State multiselect ──────────────────────────────────────────────────
     states = st.sidebar.multiselect(
         "State",
         options=CONFIG.all_states,
@@ -1552,7 +1747,6 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
     )
     states_tuple = tuple(states)
 
-    # ── Reset button (uses callback — safe) ────────────────────────────────
     if states or year != "All":
         st.sidebar.button(
             "↺  Reset filters",
@@ -1560,7 +1754,6 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
             use_container_width=True,
         )
 
-    # ── Headline + reference table ─────────────────────────────────────────
     st.sidebar.divider()
     render_headline_sidebar(year, states_tuple)
     st.sidebar.divider()
@@ -1632,7 +1825,6 @@ def render_overview(year: str, states: tuple[str, ...],
             "Set both filters to All to reproduce the sidebar reference values."
         )
 
-    # Compact headline strip — bridges Overview → Customer Satisfaction tab
     render_headline_strip(year, states)
 
     col_left, col_right = st.columns([1, 1])
@@ -1655,21 +1847,18 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     st.divider()
 
-    # Row 1 — Evidence: does late hurt? + When does it hurt?
     col_a, col_b = st.columns([1, 1])
     with col_a:
         _chart_card(chart_punctuality_vs_satisfaction, year, states)
     with col_b:
         _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    # Row 2 — Geography: which states are better/worse?
     col_c, col_d = st.columns([1, 1])
     with col_c:
         _chart_card(chart_state_scores, year, states)
     with col_d:
         _chart_card(chart_ontime_by_state, year, states)
 
-    # Row 3 — Trend + Geography (map last: heaviest network call)
     col_e, col_f = st.columns([1, 1])
     with col_e:
         _chart_card(chart_monthly_score, year, states)
@@ -1743,7 +1932,8 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "L7 — Small selections are noisy",
         """<p>Narrow selections (one state in one year) can contain only
         a few hundred reviews. Averages from small samples swing widely —
-        read the <code>n=</code> labels before drawing conclusions.</p>""",
+        read the <code>n=</code> labels before drawing conclusions. The
+        punctuality chart flags tiers below <b>n=30</b> with ⚠️.</p>""",
         variant="info", tags=["Sample size", "Filters"],
     )
 
@@ -1904,9 +2094,6 @@ def main() -> None:
     )
     _apply_global_style()
 
-    # ── Defensive one-time init of filter keys ─────────────────────────────
-    # setdefault() only writes if the key is missing — never conflicts with
-    # instantiated widgets, so this is safe on every rerun.
     st.session_state.setdefault("filter_year", "All")
     st.session_state.setdefault("filter_states", [])
 
