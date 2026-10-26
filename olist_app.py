@@ -8,7 +8,7 @@ Professional, decision-first dashboard.
   · Narrative chapter layout — evidence → when → where → trend → geography
   · Cached pandas layer · lazy tab rendering
   · Advanced punctuality module (severity tiers, CI, what-if)
-  · Streamlit Cloud ready
+  · Streamlit Cloud ready · version-safe API shims
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
@@ -145,6 +145,34 @@ if not _LOGGER.handlers:
                 logging.INFO)
     )
     _LOGGER.propagate = False
+
+# ════════════════════════════════════════════════════════════════════════════
+# §2.x  STREAMLIT API SHIMS — handle use_container_width deprecation
+# ════════════════════════════════════════════════════════════════════════════
+
+def _st_pyplot(fig: plt.Figure) -> None:
+    """st.pyplot with fallback across Streamlit versions."""
+    try:
+        st.pyplot(fig, width="stretch")
+    except TypeError:
+        st.pyplot(fig, use_container_width=True)
+
+
+def _st_dataframe(df: pd.DataFrame, *, hide_index: bool = True) -> None:
+    """st.dataframe with fallback across Streamlit versions."""
+    try:
+        st.dataframe(df, hide_index=hide_index, width="stretch")
+    except TypeError:
+        st.dataframe(df, hide_index=hide_index, use_container_width=True)
+
+
+def _st_plotly(fig) -> None:
+    """st.plotly_chart with fallback across Streamlit versions."""
+    try:
+        st.plotly_chart(fig, width="stretch")
+    except TypeError:
+        st.plotly_chart(fig, use_container_width=True)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # §3  DATA LAYER
@@ -366,7 +394,7 @@ def _finish(fig: plt.Figure) -> None:
         fig.tight_layout()
     except Exception:
         pass
-    st.pyplot(fig, use_container_width=True)
+    _st_pyplot(fig)
 
 
 def _partial_note(year: str) -> None:
@@ -389,7 +417,10 @@ def _safe_chart(fn, *args, **kwargs) -> None:
 
 
 def _chart_card(fn, *args, **kwargs) -> None:
+    """Render a chart inside a scoped card wrapper."""
     with st.container(border=True):
+        st.markdown('<div class="chart-card-scope"></div>',
+                    unsafe_allow_html=True)
         _safe_chart(fn, *args, **kwargs)
 
 
@@ -575,7 +606,12 @@ def _cohens_verdict(d: float) -> str:
 
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    """ADVANCED: severity-aware punctuality → satisfaction analysis."""
+    """ADVANCED: severity-aware punctuality → satisfaction analysis.
+
+    Chart card contains: dual-panel bar (mean + detractor) and the
+    verdict. The what-if slider + metrics + sensitivity table render
+    *outside* the card so they breathe properly.
+    """
     st.markdown("### Delivery Punctuality vs Satisfaction")
     st.caption(
         "Severity-tiered dose-response · statistical confidence · "
@@ -698,7 +734,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         unsafe_allow_html=True,
     )
 
-    # What-if scenario — interactive slider
+    # What-if scenario — rendered OUTSIDE the chart card for proper spacing
     st.markdown("#### 🎛️ What-if: convert late orders to on-time")
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
         pct = st.slider(
@@ -743,8 +779,7 @@ def chart_punctuality_vs_satisfaction(year: str,
             })
         with st.expander("📋 Full sensitivity table (5%, 10%, 25%, 50%)",
                          expanded=False):
-            st.dataframe(pd.DataFrame(scen_rows),
-                         hide_index=True, use_container_width=True)
+            _st_dataframe(pd.DataFrame(scen_rows))
             lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
             st.caption(
                 f"Stars gained per 1% of late orders converted = "
@@ -821,7 +856,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     colors = [bucket_palette.get(str(b), PALETTE.slate_400)
               for b in grp["bucket"]]
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.bar(grp["bucket"].astype(str), grp["avg_score"],
                   color=colors, edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Satisfaction by Delivery-Time Bucket",
@@ -1394,7 +1429,7 @@ def render_priority_matrix() -> None:
         )
         fig.add_hline(y=3.5, line_dash="dash", line_color="#CBD5E1")
         fig.add_vline(x=2.5, line_dash="dash", line_color="#CBD5E1")
-        st.plotly_chart(fig, use_container_width=True)
+        _st_plotly(fig)
     except ImportError:
         fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
         for _, r in items.iterrows():
@@ -1504,6 +1539,13 @@ GLOBAL_CSS: Final[str] = """
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
+  }
+  @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+    .app-hero-title b {
+      color: var(--brand) !important;
+      background: none !important;
+      -webkit-text-fill-color: var(--brand) !important;
+    }
   }
   .app-hero-sub {
     font-size: 1.05rem; color: var(--slate-600);
@@ -1927,6 +1969,7 @@ GLOBAL_CSS: Final[str] = """
     opacity: 0.9;
   }
   .insight-text { color: var(--slate-600); line-height: 1.55; }
+  .insight-text b { color: var(--ink); font-weight: 700; }
 
   /* ── Statistical verdict ─────────────────────────────────────────── */
   .verdict-card {
@@ -1979,6 +2022,15 @@ GLOBAL_CSS: Final[str] = """
     color: var(--slate-500); font-size: var(--fs-small);
   }
 
+  /* ── Intermediate breakpoint (tablets) ───────────────────────────── */
+  @media (max-width: 1100px) {
+    .app-hero { padding: var(--s5); }
+    .chapter-header { gap: var(--s3); }
+    .exec-summary { flex-direction: column; }
+    .exec-summary-badge { min-width: auto; }
+    [data-testid="stMetric"] { padding: var(--s4); }
+  }
+
   /* ── Mobile ──────────────────────────────────────────────────────── */
   @media (max-width: 768px) {
     .block-container { padding: var(--s4) !important; }
@@ -1990,6 +2042,7 @@ GLOBAL_CSS: Final[str] = """
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
     .chapter-header { flex-direction: column; gap: var(--s2); }
+    .chapter-badge { min-width: auto; }
   }
 </style>
 """
@@ -2090,7 +2143,7 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §10  TAB 1 — OVERVIEW
+# §10  TAB 1 — OVERVIEW  (Chapters 1-3)
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_overview(year: str, states: tuple[str, ...],
@@ -2114,7 +2167,7 @@ def render_overview(year: str, states: tuple[str, ...],
             unsafe_allow_html=True,
         )
 
-    # ── KPI strip — full width, 5 metrics ───────────────────────────────
+    # ── Chapter 1 — KPI strip ──────────────────────────────────────────
     _chapter(
         1, "Volume & sentiment",
         "How much business, and how satisfied?",
@@ -2130,7 +2183,7 @@ def render_overview(year: str, states: tuple[str, ...],
         c3.metric("Avg Review Score", "—")
     else:
         delta = (
-            f"{k['avg_review_score'] - REF['avg_review_score']:+.2f} vs ref"
+            f"{k['avg_review_score'] - REF['avg_review_score']:+.2f} vs baseline"
             if filter_active else None
         )
         c3.metric("Avg Review Score", fmt_float(k["avg_review_score"]),
@@ -2151,10 +2204,9 @@ def render_overview(year: str, states: tuple[str, ...],
             "Set both filters to All to reproduce the sidebar reference values."
         )
 
-    # ── Headline strip — bridges to the satisfaction tab ───────────────
     render_headline_strip(year, states)
 
-    # ── Chapter 2 — full-width distribution ────────────────────────────
+    # ── Chapter 2 — Review distribution (full-width) ───────────────────
     _chapter(
         2, "Rating distribution",
         "Where do the reviews land?",
@@ -2163,7 +2215,7 @@ def render_overview(year: str, states: tuple[str, ...],
     )
     _chart_card(chart_review_distribution, year, states)
 
-    # ── Chapter 3 — full-width volume by year ──────────────────────────
+    # ── Chapter 3 — Volume by year (full-width) ────────────────────────
     _chapter(
         3, "Volume by year",
         "When did the reviews happen?",
@@ -2174,18 +2226,16 @@ def render_overview(year: str, states: tuple[str, ...],
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §11  TAB 2 — CUSTOMER SATISFACTION
-#       Narrative order: evidence → when → where → trend → geography
+# §11  TAB 2 — CUSTOMER SATISFACTION  (Chapters 4-8)
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## ⭐ Customer Satisfaction — the decision story")
 
-    # ── Hero + decision snapshot ───────────────────────────────────────
     render_headline_hero(year, states)
     render_decision_snapshot(year, states)
 
-    # ── Chapter 4 — Evidence: does lateness hurt? ──────────────────────
+    # ── Chapter 4 — Evidence ───────────────────────────────────────────
     _chapter(
         4, "Evidence — driver",
         "Does lateness hurt satisfaction?",
@@ -2194,7 +2244,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
     )
     _chart_card(chart_punctuality_vs_satisfaction, year, states)
 
-    # ── Chapter 5 — When does it hurt? ─────────────────────────────────
+    # ── Chapter 5 — Timing ─────────────────────────────────────────────
     _chapter(
         5, "Timing — when",
         "Where in the delivery window does satisfaction collapse?",
@@ -2203,7 +2253,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
     )
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    # ── Chapter 6 — Where (2-up: state scores | on-time by state) ──────
+    # ── Chapter 6 — Geography (2-up) ───────────────────────────────────
     _chapter(
         6, "Geography — where",
         "Which states over- and under-perform?",
@@ -2216,7 +2266,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
     with col_b:
         _chart_card(chart_ontime_by_state, year, states)
 
-    # ── Chapter 7 — Trend (full-width) ─────────────────────────────────
+    # ── Chapter 7 — Trend ──────────────────────────────────────────────
     _chapter(
         7, "Trend — over time",
         "How has satisfaction moved month to month?",
@@ -2225,7 +2275,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
     )
     _chart_card(chart_monthly_score, year, states)
 
-    # ── Chapter 8 — Map (full-width) ───────────────────────────────────
+    # ── Chapter 8 — Map ────────────────────────────────────────────────
     _chapter(
         8, "Geography — map",
         "Where does the volume sit?",
@@ -2236,7 +2286,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §12  TAB 3 — DETAIL & METHOD
+# §12  TAB 3 — DETAIL & METHOD  (Chapters 9-10)
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_detail(year: str, states: tuple[str, ...]) -> None:
@@ -2246,8 +2296,9 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "read before quoting the numbers in a decision."
     )
 
+    # ── Chapter 9 — Limitations ────────────────────────────────────────
     _chapter(
-        1, "Limitations",
+        9, "Limitations",
         "What to keep in mind",
         "Seven caveats that scope every claim in this dashboard.",
     )
@@ -2315,8 +2366,9 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         variant="info", tags=["Sample size", "Filters"],
     )
 
+    # ── Chapter 10 — Diagnostics ───────────────────────────────────────
     _chapter(
-        2, "Diagnostics",
+        10, "Diagnostics",
         "Whole-dataset integrity checks",
         "Counts computed across the entire dataset — these do not respond "
         "to the filters because they describe the source data itself.",
@@ -2335,25 +2387,17 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     c1, c2 = st.columns(2, gap="medium")
     with c1:
         st.markdown("**Reviews fan-out**")
-        st.dataframe(
-            pd.DataFrame([{
-                "review_rows": review_rows,
-                "distinct_orders": distinct_orders,
-                "duplicate_rows": duplicate_rows,
-            }]),
-            hide_index=True,
-            use_container_width=True,
-        )
+        _st_dataframe(pd.DataFrame([{
+            "review_rows": review_rows,
+            "distinct_orders": distinct_orders,
+            "duplicate_rows": duplicate_rows,
+        }]))
     with c2:
         st.markdown("**Customer identity**")
-        st.dataframe(
-            pd.DataFrame([{
-                "customer_rows": customer_rows,
-                "unique_customers": unique_customers,
-            }]),
-            hide_index=True,
-            use_container_width=True,
-        )
+        _st_dataframe(pd.DataFrame([{
+            "customer_rows": customer_rows,
+            "unique_customers": unique_customers,
+        }]))
 
     model = get_model()
     late = model[model["is_late"]]
@@ -2363,15 +2407,11 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
             - late["order_estimated_delivery_date"]
         ).dt.days
         st.markdown("**Days late when late (whole dataset)**")
-        st.dataframe(
-            pd.DataFrame([{
-                "late_orders": len(late),
-                "avg_days_late": round(float(dl.mean()), 2),
-                "worst_days_late": int(dl.max()),
-            }]),
-            hide_index=True,
-            use_container_width=True,
-        )
+        _st_dataframe(pd.DataFrame([{
+            "late_orders": len(late),
+            "avg_days_late": round(float(dl.mean()), 2),
+            "worst_days_late": int(dl.max()),
+        }]))
         st.caption(
             f"When late, orders run **{dl.mean():.2f} days past estimate** "
             f"on average; the worst case is **{int(dl.max())} days**."
@@ -2379,7 +2419,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §13  TAB 4 — RECOMMENDATIONS
+# §13  TAB 4 — RECOMMENDATIONS  (Chapters 11-12)
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations() -> None:
@@ -2391,16 +2431,18 @@ def render_recommendations() -> None:
         "because someone narrowed the view."
     )
 
+    # ── Chapter 11 — Prioritisation ────────────────────────────────────
     _chapter(
-        1, "Prioritisation",
+        11, "Prioritisation",
         "What to do first",
         "Impact × effort — top-left is the highest-leverage quadrant. "
         "R2 and R5 are quick wins; R1 is the largest ceiling.",
     )
     render_priority_matrix()
 
+    # ── Chapter 12 — Action plan ───────────────────────────────────────
     _chapter(
-        2, "Action plan",
+        12, "Action plan",
         "Five prioritised recommendations",
         "Each card carries evidence, action, lead and measures — ready to "
         "hand to the team that owns it.",
@@ -2480,6 +2522,7 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    # ── CRITICAL: set_page_config MUST be the first Streamlit call ──────
     st.set_page_config(
         page_title="Customer Satisfaction · Olist",
         page_icon="📊",
@@ -2510,8 +2553,13 @@ def main() -> None:
         st.stop()
 
     year, states = render_sidebar()
+    k_live = query_kpis(year, states)   # live values for hero meta
 
     # ── Hero header — LARGE, layered, attention-grabbing ────────────────
+    avg_live = (
+        f"{k_live['avg_review_score']:.2f}★"
+        if k_live["avg_review_score"] else f"{REF['avg_review_score']:.2f}★"
+    )
     st.markdown(
         f"""
         <div class="app-hero">
@@ -2526,15 +2574,14 @@ def main() -> None:
           </p>
           <div class="app-hero-meta">
             <span class="scope-pill">Scope: {scope_label(year, states)}</span>
-            <span class="scope-pill-subtle">📦 {REF['total_orders']:,} orders</span>
-            <span class="scope-pill-subtle">⭐ {REF['avg_review_score']:.2f}★ avg</span>
+            <span class="scope-pill-subtle">📦 {k_live['total_orders']:,} orders</span>
+            <span class="scope-pill-subtle">⭐ {avg_live} avg</span>
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # ── Executive summary ──────────────────────────────────────────────
     render_executive_summary(year, states)
 
     st.write("")
@@ -2546,8 +2593,9 @@ def main() -> None:
         "💡 Recommendations",
     ])
 
+    filter_active = year != "All" or bool(states)
     with tab_overview:
-        render_overview(year, states, filter_active=(year != "All" or bool(states)))
+        render_overview(year, states, filter_active=filter_active)
     with tab_theme:
         render_theme(year, states)
     with tab_detail:
