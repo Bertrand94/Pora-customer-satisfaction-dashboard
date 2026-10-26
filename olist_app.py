@@ -8,7 +8,7 @@ Professional, decision-first dashboard.
   · Navigation tabs in the sidebar · cached pandas layer
   · Advanced punctuality module (severity tiers, CI, what-if)
   · Streamlit Cloud ready · version-safe API shims
-  · PORA Academy logo reliably hosted
+  · Local PORA Academy logo integration
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
@@ -18,6 +18,7 @@ Optional: scipy (statistical CI), plotly (interactive matrix)
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import os
@@ -42,9 +43,6 @@ PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
 PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
-
-# Reliable hosted URL for the logo
-PORA_LOGO_URL: Final[str] = "https://i.ibb.co/3W1zS7v/pora-logo.png"
 
 REF = {
     "total_orders":      99_441,
@@ -173,6 +171,28 @@ def _st_plotly(fig) -> None:
         st.plotly_chart(fig, width="stretch")
     except TypeError:
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# §2.y  LOGO HELPER (Reads local file and converts to Base64)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _get_logo_base64() -> str:
+    """Reads local pora_logo.png and returns it as a Base64 string."""
+    # Try to find the logo in the same directory as the app
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pora_logo.png")
+    
+    if os.path.isfile(local_path):
+        try:
+            with open(local_path, "rb") as f:
+                data = f.read()
+                encoded = base64.b64encode(data).decode()
+                return f"data:image/png;base64,{encoded}"
+        except Exception as e:
+            _LOGGER.error(f"Failed to load local logo: {e}")
+            
+    # Fallback: A small, generic SVG icon if the file is missing
+    return "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNEY0NkU1IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiPjwvY2lyY2xlPjxwYXRoIGQ9Ik0xMiA4djgiPjwvcGF0aD48cGF0aCBkPSJNOCAxMmg4Ij48L3BhdGg+PC9zdmc+"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2158,10 +2178,7 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
         f"| Late | {REF['late_deliveries']:,} |\n"
         f"| Avg Delivery Days | {REF['avg_delivery_days']:.2f} |"
     )
-    return active_tab, year, states_tuple
-
-
-# ════════════════════════════════════════════════════════════════════════════
+    return active_tab, year, states_tuple# ════════════════════════════════════════════════════════════════════════════
 # §10  VIEW — Overview
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -2519,8 +2536,8 @@ def main() -> None:
     active_tab, year, states = render_sidebar()
     k_live = query_kpis(year, states)
 
-    # 2. Logo Integrated (Reliable External URL)
-    logo_src = PORA_LOGO_URL
+    # 2. Logo Integrated (Reads local file)
+    logo_src = _get_logo_base64()
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
         if k_live["avg_review_score"] else f"{REF['avg_review_score']:.2f}★"
