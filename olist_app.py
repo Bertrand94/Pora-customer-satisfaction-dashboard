@@ -5,14 +5,15 @@ PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
 Professional, decision-first dashboard.
   · Modern indigo/coral palette · Sora + Inter + JetBrains Mono
-  · Cached pandas layer · lazy tab rendering · narrative chart order
+  · Narrative chapter layout — evidence → when → where → trend → geography
+  · Cached pandas layer · lazy tab rendering
   · Advanced punctuality module (severity tiers, CI, what-if)
   · Streamlit Cloud ready
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
 Requires: streamlit, pandas, matplotlib, requests
-Optional: scipy (statistical CI), plotly (interactive hover)
+Optional: scipy (statistical CI), plotly (interactive matrix)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from matplotlib.ticker import FuncFormatter
 # ════════════════════════════════════════════════════════════════════════════
 
 CHART_FIGSIZE: Final[tuple[float, float]] = (8.6, 4.8)
+CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
 PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
@@ -55,15 +57,13 @@ REF = {
 
 @dataclass(frozen=True)
 class Palette:
-    # ── Brand: modern indigo + coral ────────────────────────────────────
-    primary:       str = "#4F46E5"   # indigo-600
-    primary_light: str = "#A5B4FC"   # indigo-300
-    primary_dark:  str = "#3730A3"   # indigo-800
-    accent:        str = "#F97316"   # orange-500
-    accent_light:  str = "#FDBA74"   # orange-300
-    accent_dark:   str = "#C2410C"   # orange-700
+    primary:       str = "#4F46E5"
+    primary_light: str = "#A5B4FC"
+    primary_dark:  str = "#3730A3"
+    accent:        str = "#F97316"
+    accent_light:  str = "#FDBA74"
+    accent_dark:   str = "#C2410C"
 
-    # ── Semantic ────────────────────────────────────────────────────────
     success:       str = "#10B981"
     success_light: str = "#6EE7B7"
     warn:          str = "#F59E0B"
@@ -71,7 +71,6 @@ class Palette:
     danger:        str = "#E11D48"
     danger_light:  str = "#FDA4AF"
 
-    # ── Neutrals ────────────────────────────────────────────────────────
     ink:           str = "#0F172A"
     ink_soft:      str = "#1E293B"
     slate_700:     str = "#334155"
@@ -367,7 +366,7 @@ def _finish(fig: plt.Figure) -> None:
         fig.tight_layout()
     except Exception:
         pass
-    st.pyplot(fig)
+    st.pyplot(fig, use_container_width=True)
 
 
 def _partial_note(year: str) -> None:
@@ -394,6 +393,23 @@ def _chart_card(fn, *args, **kwargs) -> None:
         _safe_chart(fn, *args, **kwargs)
 
 
+def _chapter(num: int, eyebrow: str, title: str, subtitle: str) -> None:
+    """Render a chapter header — anchors the story, guides the reader."""
+    st.markdown(
+        f"""
+        <div class="chapter-header">
+          <div class="chapter-badge">CHAPTER {num}</div>
+          <div class="chapter-body">
+            <div class="chapter-eyebrow">{eyebrow}</div>
+            <h3 class="chapter-title">{title}</h3>
+            <p class="chapter-subtitle">{subtitle}</p>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # §6  CHARTS — Overview
 # ════════════════════════════════════════════════════════════════════════════
@@ -418,7 +434,7 @@ def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
         for s in counts.index
     ]
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.bar(counts.index.astype(str), counts.values, color=shades,
                   edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Review Score Distribution", pad=14, loc="left")
@@ -456,7 +472,7 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
         PALETTE.warn if y in PARTIAL_YEARS else PALETTE.primary
         for y in counts.index
     ]
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.barh(counts.index.astype(str), counts.values, color=colors,
                    edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Review Volume Share by Year", pad=14, loc="left")
@@ -598,7 +614,7 @@ def chart_punctuality_vs_satisfaction(year: str,
 
     fig, axes = plt.subplots(
         1, 2,
-        figsize=(CHART_FIGSIZE[0], CHART_FIGSIZE[1] * 0.95),
+        figsize=CHART_FIGSIZE_WIDE,
         gridspec_kw={"wspace": 0.32},
     )
     ax1, ax2 = axes
@@ -708,7 +724,7 @@ def chart_punctuality_vs_satisfaction(year: str,
     else:
         st.caption("Widen the filters to enable the what-if calculator.")
 
-    # Business-impact projection table (full scenarios, all at once)
+    # Full sensitivity table
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
         on_mean = float(on_time_scores.mean())
         late_mean = float(late_scores.mean())
@@ -728,7 +744,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         with st.expander("📋 Full sensitivity table (5%, 10%, 25%, 50%)",
                          expanded=False):
             st.dataframe(pd.DataFrame(scen_rows),
-                         hide_index=True, width="stretch")
+                         hide_index=True, use_container_width=True)
             lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
             st.caption(
                 f"Stars gained per 1% of late orders converted = "
@@ -963,7 +979,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         _no_data()
         return
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     ax.plot(grp["month"], grp["avg_score"], marker="o",
             color=PALETTE.primary, linewidth=2.4, markersize=6,
             markerfacecolor=PALETTE.white, markeredgewidth=1.8)
@@ -1097,7 +1113,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
     cmap = plt.get_cmap("YlGnBu")
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     ax.set_axis_off()
     ax.set_title(f"Delivered Orders by State — {scope_label(year, states)}",
                  fontsize=12, fontweight="bold",
@@ -1301,7 +1317,6 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
     k = query_kpis(year, states)
     g = query_headline_gap(year, states)
 
-    # Verdict tier
     if g["gap"] is None:
         verdict_txt, verdict_color = "Inconclusive", PALETTE.slate_500
     elif g["gap"] >= 1.5:
@@ -1360,7 +1375,6 @@ def render_priority_matrix() -> None:
          "impact": 4, "effort": 1, "region": "Brand"},
     ])
 
-    # Try Plotly; fall back to matplotlib
     try:
         import plotly.express as px
         fig = px.scatter(
@@ -1374,7 +1388,7 @@ def render_priority_matrix() -> None:
         fig.update_traces(textposition="top center",
                           textfont=dict(size=14, color=PALETTE.ink))
         fig.update_layout(
-            height=420, margin=dict(l=10, r=10, t=10, b=10),
+            height=440, margin=dict(l=10, r=10, t=10, b=10),
             xaxis_title="Effort →", yaxis_title="Impact →",
             plot_bgcolor="white",
         )
@@ -1382,7 +1396,7 @@ def render_priority_matrix() -> None:
         fig.add_vline(x=2.5, line_dash="dash", line_color="#CBD5E1")
         st.plotly_chart(fig, use_container_width=True)
     except ImportError:
-        fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+        fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
         for _, r in items.iterrows():
             c = (PALETTE.danger if r["impact"] >= 5
                  else PALETTE.warn if r["impact"] >= 4
@@ -1435,11 +1449,9 @@ GLOBAL_CSS: Final[str] = """
     --slate-200:    #E2E8F0;
     --slate-100:    #F1F5F9;
     --slate-50:     #F8FAFC;
-    /* 8-pt spacing scale */
     --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
     --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
-    /* Fluid type scale */
-    --fs-display: clamp(1.6rem, 1.2rem + 1.2vw, 2.1rem);
+    --fs-hero:    clamp(2.2rem, 1.8rem + 1.6vw, 3rem);
     --fs-h1:      clamp(1.4rem, 1.1rem + 1vw,   1.9rem);
     --fs-h2:      clamp(1.2rem, 1.05rem + 0.6vw, 1.45rem);
     --fs-h3:      clamp(1.05rem, 1rem + 0.3vw,   1.15rem);
@@ -1454,12 +1466,91 @@ GLOBAL_CSS: Final[str] = """
     -webkit-font-smoothing: antialiased;
   }
   .stApp { background: var(--slate-50); }
-  h1, h2, h3, .hero-headline, .exec-summary-title,
-  .hero-label, .exec-summary-eyebrow {
+  h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
+  .hero-label, .exec-summary-eyebrow, .chapter-title {
     font-family: 'Sora', 'Inter', sans-serif !important;
     letter-spacing: -0.015em;
   }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
+
+  /* ── App hero (BIG title) ────────────────────────────────────────── */
+  .app-hero {
+    background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
+    border: 1px solid var(--slate-200);
+    border-radius: var(--s5);
+    padding: var(--s6) var(--s7);
+    margin-bottom: var(--s5);
+    box-shadow: 0 4px 24px rgba(79,70,229,0.08);
+  }
+  .app-hero-eyebrow {
+    font-size: 0.78rem; font-weight: 800;
+    letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--brand); margin-bottom: var(--s3);
+    font-family: 'Sora', sans-serif !important;
+  }
+  .app-hero-title {
+    font-size: var(--fs-hero) !important;
+    font-weight: 800 !important;
+    color: var(--ink) !important;
+    line-height: 1.08 !important;
+    margin: 0 0 var(--s3) 0 !important;
+    padding: 0 !important;
+    letter-spacing: -0.035em !important;
+    display: block;
+  }
+  .app-hero-title b {
+    color: var(--brand-dark);
+    background: linear-gradient(120deg, var(--brand) 0%, var(--accent) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  .app-hero-sub {
+    font-size: 1.05rem; color: var(--slate-600);
+    margin: 0 0 var(--s4) 0; line-height: 1.55;
+    max-width: 780px;
+  }
+  .app-hero-meta {
+    display: flex; gap: var(--s3); flex-wrap: wrap;
+    align-items: center;
+  }
+
+  /* ── Chapter header ──────────────────────────────────────────────── */
+  .chapter-header {
+    display: flex; gap: var(--s4); align-items: flex-start;
+    padding: var(--s4) 0 var(--s3) 0;
+    margin-top: var(--s5);
+    border-top: 1px solid var(--slate-200);
+  }
+  .chapter-badge {
+    flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+    color: #FFFFFF; font-family: 'Sora', sans-serif;
+    font-size: 0.68rem; font-weight: 800;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    padding: var(--s2) var(--s3); border-radius: var(--s2);
+    box-shadow: 0 2px 8px rgba(79,70,229,0.25);
+    min-width: 100px;
+  }
+  .chapter-body { flex: 1; min-width: 0; }
+  .chapter-eyebrow {
+    font-size: 0.72rem; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--accent-dark); margin-bottom: 2px;
+  }
+  .chapter-title {
+    font-size: var(--fs-h2) !important;
+    font-weight: 800 !important;
+    color: var(--ink) !important;
+    margin: 0 0 var(--s2) 0 !important;
+    padding: 0 !important;
+    line-height: 1.25 !important;
+  }
+  .chapter-subtitle {
+    font-size: var(--fs-body); color: var(--slate-600);
+    margin: 0; line-height: 1.55;
+  }
 
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
        line-height: 1.2; margin-bottom: var(--s2); }
@@ -1588,15 +1679,15 @@ GLOBAL_CSS: Final[str] = """
     font-size: 0.78rem !important;
   }
 
-  /* ── Chart containers ────────────────────────────────────────────── */
+  /* ── Chart containers — generous padding ─────────────────────────── */
   [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
     border-radius: var(--s3) !important;
-    padding: var(--s4) var(--s5) !important;
+    padding: var(--s5) var(--s6) !important;
     box-shadow: 0 1px 2px rgba(15,23,42,0.03),
                 0 4px 14px rgba(15,23,42,0.04);
-    margin-bottom: var(--s3);
+    margin-bottom: var(--s4);
   }
   [data-testid="stVerticalBlockBorderWrapper"] h3 {
     margin-top: 0 !important;
@@ -1800,8 +1891,16 @@ GLOBAL_CSS: Final[str] = """
     color: #FFFFFF; border-radius: 999px;
     padding: var(--s2) var(--s4);
     font-size: var(--fs-small); font-weight: 600;
-    margin-bottom: var(--s2);
     box-shadow: 0 2px 10px rgba(79,70,229,0.30);
+  }
+  .scope-pill-subtle {
+    display: inline-block;
+    background: var(--slate-100);
+    color: var(--slate-700);
+    border: 1px solid var(--slate-200);
+    border-radius: 999px;
+    padding: var(--s2) var(--s4);
+    font-size: var(--fs-small); font-weight: 600;
   }
 
   /* ── Insight ─────────────────────────────────────────────────────── */
@@ -1883,11 +1982,14 @@ GLOBAL_CSS: Final[str] = """
   /* ── Mobile ──────────────────────────────────────────────────────── */
   @media (max-width: 768px) {
     .block-container { padding: var(--s4) !important; }
+    .app-hero { padding: var(--s5) var(--s4); }
+    .app-hero-title { font-size: 1.8rem !important; }
     .hero-banner, .headline-strip {
       flex-direction: column; align-items: flex-start;
     }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
+    .chapter-header { flex-direction: column; gap: var(--s2); }
   }
 </style>
 """
@@ -1993,7 +2095,7 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
 
 def render_overview(year: str, states: tuple[str, ...],
                     filter_active: bool) -> None:
-    st.markdown("## Overview")
+    st.markdown("## 📈 Overview — the shape of the business")
 
     if is_partial_year(year):
         detail = {
@@ -2012,8 +2114,15 @@ def render_overview(year: str, states: tuple[str, ...],
             unsafe_allow_html=True,
         )
 
+    # ── KPI strip — full width, 5 metrics ───────────────────────────────
+    _chapter(
+        1, "Volume & sentiment",
+        "How much business, and how satisfied?",
+        "Five headline KPIs across the current selection — these anchor the "
+        "story before we go into the charts.",
+    )
     k = query_kpis(year, states)
-    c1, c2, c3, c4, c5 = st.columns(5)
+    c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
     c2.metric("Delivered Orders", fmt_int(k["delivered_orders"]))
 
@@ -2042,44 +2151,88 @@ def render_overview(year: str, states: tuple[str, ...],
             "Set both filters to All to reproduce the sidebar reference values."
         )
 
+    # ── Headline strip — bridges to the satisfaction tab ───────────────
     render_headline_strip(year, states)
 
-    col_left, col_right = st.columns([1, 1], gap="medium")
-    with col_left:
-        _chart_card(chart_review_distribution, year, states)
-    with col_right:
-        _chart_card(chart_review_volume_by_year, year, states)
+    # ── Chapter 2 — full-width distribution ────────────────────────────
+    _chapter(
+        2, "Rating distribution",
+        "Where do the reviews land?",
+        "The full 1–5★ spread — shows the volume of delight (5★) versus "
+        "damage (1–2★) before we ask *why*.",
+    )
+    _chart_card(chart_review_distribution, year, states)
+
+    # ── Chapter 3 — full-width volume by year ──────────────────────────
+    _chapter(
+        3, "Volume by year",
+        "When did the reviews happen?",
+        "Year contribution — flags the partial years (2016, 2018) so nobody "
+        "misreads the trend.",
+    )
+    _chart_card(chart_review_volume_by_year, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
 # §11  TAB 2 — CUSTOMER SATISFACTION
+#       Narrative order: evidence → when → where → trend → geography
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("## Customer Satisfaction")
+    st.markdown("## ⭐ Customer Satisfaction — the decision story")
 
+    # ── Hero + decision snapshot ───────────────────────────────────────
     render_headline_hero(year, states)
     render_decision_snapshot(year, states)
 
-    st.divider()
+    # ── Chapter 4 — Evidence: does lateness hurt? ──────────────────────
+    _chapter(
+        4, "Evidence — driver",
+        "Does lateness hurt satisfaction?",
+        "Severity-tiered dose-response, plus a statistical verdict and a "
+        "what-if calculator. This is the core finding of the analysis.",
+    )
+    _chart_card(chart_punctuality_vs_satisfaction, year, states)
 
-    col_a, col_b = st.columns([1, 1], gap="medium")
+    # ── Chapter 5 — When does it hurt? ─────────────────────────────────
+    _chapter(
+        5, "Timing — when",
+        "Where in the delivery window does satisfaction collapse?",
+        "Days from purchase to delivery, bucketed — reveals the exact "
+        "threshold where ratings begin to drop.",
+    )
+    _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
+
+    # ── Chapter 6 — Where (2-up: state scores | on-time by state) ──────
+    _chapter(
+        6, "Geography — where",
+        "Which states over- and under-perform?",
+        "Two views side by side — satisfaction by state and the on-time "
+        "vs late split for the highest-volume states.",
+    )
+    col_a, col_b = st.columns(2, gap="medium")
     with col_a:
-        _chart_card(chart_punctuality_vs_satisfaction, year, states)
-    with col_b:
-        _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
-
-    col_c, col_d = st.columns([1, 1], gap="medium")
-    with col_c:
         _chart_card(chart_state_scores, year, states)
-    with col_d:
+    with col_b:
         _chart_card(chart_ontime_by_state, year, states)
 
-    col_e, col_f = st.columns([1, 1], gap="medium")
-    with col_e:
-        _chart_card(chart_monthly_score, year, states)
-    with col_f:
-        _chart_card(chart_brazil_map, year, states)
+    # ── Chapter 7 — Trend (full-width) ─────────────────────────────────
+    _chapter(
+        7, "Trend — over time",
+        "How has satisfaction moved month to month?",
+        "Monthly average review score across the whole period — the "
+        "trajectory matters as much as the level.",
+    )
+    _chart_card(chart_monthly_score, year, states)
+
+    # ── Chapter 8 — Map (full-width) ───────────────────────────────────
+    _chapter(
+        8, "Geography — map",
+        "Where does the volume sit?",
+        "Delivered orders by state on the map — the geographic backbone "
+        "of the whole analysis. Selected states are coloured; the rest are greyed.",
+    )
+    _chart_card(chart_brazil_map, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2087,8 +2240,17 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_detail(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("## Detail & Method")
-    st.markdown("### Data limitations")
+    st.markdown("## 🔬 Detail & Method")
+    st.markdown(
+        "The limitations that govern how far you can take these findings — "
+        "read before quoting the numbers in a decision."
+    )
+
+    _chapter(
+        1, "Limitations",
+        "What to keep in mind",
+        "Seven caveats that scope every claim in this dashboard.",
+    )
 
     info_card(
         "L1 — Association, not causation",
@@ -2153,8 +2315,12 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         variant="info", tags=["Sample size", "Filters"],
     )
 
-    st.divider()
-    st.markdown("### Whole-dataset diagnostics")
+    _chapter(
+        2, "Diagnostics",
+        "Whole-dataset integrity checks",
+        "Counts computed across the entire dataset — these do not respond "
+        "to the filters because they describe the source data itself.",
+    )
 
     frames = load_data()
     reviews = frames["reviews"]
@@ -2217,7 +2383,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations() -> None:
-    st.markdown("## Recommendations")
+    st.markdown("## 💡 Recommendations")
     st.markdown(
         "Prioritised actions following from the headline finding. "
         "They are based on the **whole dataset**, so they do not change "
@@ -2225,10 +2391,20 @@ def render_recommendations() -> None:
         "because someone narrowed the view."
     )
 
+    _chapter(
+        1, "Prioritisation",
+        "What to do first",
+        "Impact × effort — top-left is the highest-leverage quadrant. "
+        "R2 and R5 are quick wins; R1 is the largest ceiling.",
+    )
     render_priority_matrix()
 
-    st.divider()
-    st.markdown("### Prioritised recommendations")
+    _chapter(
+        2, "Action plan",
+        "Five prioritised recommendations",
+        "Each card carries evidence, action, lead and measures — ready to "
+        "hand to the team that owns it.",
+    )
 
     info_card(
         "🔴 R1 — Investigate RJ delivery failures (highest ROI)",
@@ -2304,7 +2480,6 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    # ── CRITICAL: set_page_config MUST be the first Streamlit call ──────
     st.set_page_config(
         page_title="Customer Satisfaction · Olist",
         page_icon="📊",
@@ -2335,23 +2510,27 @@ def main() -> None:
         st.stop()
 
     year, states = render_sidebar()
-    filter_active = year != "All" or bool(states)
 
-    # ── Header ──────────────────────────────────────────────────────────
+    # ── Hero header — LARGE, layered, attention-grabbing ────────────────
     st.markdown(
-        """
-        <h1 style="color:#0F172A; font-size:2rem; font-weight:800;
-                   letter-spacing:-0.03em; margin-bottom:4px; padding-bottom:0;">
-          Customer Satisfaction Dashboard
-        </h1>
-        <p style='color:#64748B; font-size:0.95rem; margin-top:0;'>
-          PORA Academy Cohort 7 — Group 1 Capstone · Decision-first view
-        </p>
+        f"""
+        <div class="app-hero">
+          <div class="app-hero-eyebrow">PORA Academy · Cohort 7 · Capstone</div>
+          <div class="app-hero-title">
+            Customer <b>Satisfaction</b> Dashboard
+          </div>
+          <p class="app-hero-sub">
+            A decision-first view of 99,000+ Olist orders.
+            Delivery punctuality is the strongest satisfaction driver —
+            late orders lose <b>{REF['star_gap']:.2f}★</b> on average.
+          </p>
+          <div class="app-hero-meta">
+            <span class="scope-pill">Scope: {scope_label(year, states)}</span>
+            <span class="scope-pill-subtle">📦 {REF['total_orders']:,} orders</span>
+            <span class="scope-pill-subtle">⭐ {REF['avg_review_score']:.2f}★ avg</span>
+          </div>
+        </div>
         """,
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f'<span class="scope-pill">Scope: {scope_label(year, states)}</span>',
         unsafe_allow_html=True,
     )
 
@@ -2368,7 +2547,7 @@ def main() -> None:
     ])
 
     with tab_overview:
-        render_overview(year, states, filter_active)
+        render_overview(year, states, filter_active=(year != "All" or bool(states)))
     with tab_theme:
         render_theme(year, states)
     with tab_detail:
