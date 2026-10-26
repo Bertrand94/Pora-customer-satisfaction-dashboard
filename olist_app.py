@@ -173,14 +173,14 @@ def _st_plotly(fig) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════════════════════════
 # §2.y  LOGO HELPER (Embedded Base64)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _get_logo_base64() -> str:
     """Returns the PORA Academy logo as an embedded Base64 string."""
-    # Embedded directly to guarantee rendering on Streamlit Cloud without files.
+    # Embedded directly to guarantee rendering on Streamlit Cloud without missing file errors.
     return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMgAAABkCAYAAABW1v8xAAAACXBIWXMAAAsTAAALEwEAmpwYAAAF8WlUWHRYTUw6Y29tLmFkb2JlLnhtcAAAAAAAPD94cGFja2V0IGJlZ2luPSLvu78iIGlkPSJXNU0wTXBDZWhpSHpyZVN6TlRjemtjOWQiPz4gPHg6eG1wbWV0YSB4bWxuczp4PSJhZG9iZTpuczptZXRhLyIgeDp4bXB0az0iQWRvYmUgWE1QIENvcmUgOS4xLWMwMDEgNzkuYjcxYjQ1MiA3OS4xYjcxYjQ1MiwgMjAyMi8wOS8xNC0wMDozOTo0NiAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvIiB4bWxuczpkYz0iaHR0cDovL3B1cmwub3JnL2RjL2VsZW1lbnRzLzEuMS8iIHhtbG5zOnBob3Rvc2hvcD0iaHR0cDovL25zLmFkb2JlLmNvbS9waG90b3Nob3AvMS4wLyIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0RXZ0PSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VFdmVudCMiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIDI0LjAgKFdpbmRvd3MpIiB4bXA6Q3JlYXRlRGF0ZT0iMjAyMy0wMS0xMVQxMTo1ODo0MSswMTowMCIgeG1wOk1vZGlmeURhdGU9IjIwMjMtMDEtMTFUMTE6NTg6NDErMDE6MDAiIHhtcDpNZXRhZGF0YURhdGU9IjIwMjMtMDEtMTFUMTE6NTg6NDErMDE6MDAiIGRjOmZvcm1hdD0iaW1hZ2UvcG5nIiBwaG90b3Nob3A6Q29sb3JNb2RlPSIzIiB4bXBNTTpJbnN0YW5jZUlEPSJ4bXAuaWlkOmQ3M2YyZTIyLWM0M2YtNDQyZS1hZmI5LTVjY2Q2M2Y5MmY4ZiIgeG1wTU06RG9jdW1lbnRJRD0ieG1wLmRpZDpkNzNmMmUyMi1jNDNmLTQ0MmUtYWZiOS01Y2NkNjNmOTJmOGYiIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDpkNzNmMmUyMi1jNDNmLTQ0MmUtYWZiOS01Y2NkNjNmOTJmOGYiPiA8eG1wTU06SGlzdG9yeT4gPHJkZjpTZXE+IDxyZGY6bGkgc3RFdnQ6YWN0aW9uPSJjcmVhdGVkIiBzdEV2dDppbnN0YW5jZUlEPSJ4bXAuaWlkOmQ3M2YyZTIyLWM0M2YtNDQyZS1hZmI5LTVjY2Q2M2Y5MmY4ZiIgc3RFdnQ6d2hlbj0iMjAyMy0wMS0xMVQxMTo1ODo0MSswMTowMCIgc3RFdnQ6c29mdHdhcmVBZ2VudD0iQWRvYmUgUGhvdG9zaG9wIDI0LjAgKFdpbmRvd3MpIi8+IDwvcmRmOlNlcT4gPC94bXBNTTpIaXN0b3J5PiA8L3JkZjpEZXNjcmlwdGlvbj4gPC9yZGY6UkRGPiA8L3g6eG1wbWV0YT4gPD94cGFja2V0IGVuZD0iciI/PgH//v38+/r5+Pf29fTz8vHw7+7t7Ovq6ejn5uXk4+Lh4N/e3dzb2tnY19bV1NPS0dDPzs3My8rJyMfGxcTDwsHAv769vLu6ubi3trW0s7KxsK+urayrqqmop6alpKOioaCfnp2cm5qZmJeWlZSTkpGQj46NjIuKiYiHhoWEg4KBgH9+fXx7enl4d3Z1dHNycXBvbm1sa2ppaGdmZWRjYmFgX15dXFtaWVhXVlVUU1JRUE9OTUxLSklIR0ZFRENCQUA/Pj08Ozo5ODc2NTQzMjEwLy4tLCsqKSgnJiUkIyIhIB8eHRwbGhkYFxYVFBMSERAPDg0MCwoJCAcGBQQDAgEAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # §3  DATA LAYER
@@ -2526,7 +2526,7 @@ def main() -> None:
     active_tab, year, states = render_sidebar()
     k_live = query_kpis(year, states)
 
-    # 2. Logo Integrated (Embedded Base64)
+      # ── Hero header (with Logo) ─────────────────────────────────────────
     logo_src = _get_logo_base64()
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
@@ -2556,7 +2556,7 @@ def main() -> None:
         """,
         unsafe_allow_html=True,
     )
-
+    
     render_executive_summary(year, states)
 
     st.write("")
