@@ -5,8 +5,7 @@ PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
 Professional, decision-first dashboard.
   · Modern indigo/coral palette · Sora + Inter + JetBrains Mono
-  · Narrative chapter layout — evidence → when → where → trend → geography
-  · Cached pandas layer · lazy tab rendering
+  · Navigation tabs in the sidebar · cached pandas layer
   · Advanced punctuality module (severity tiers, CI, what-if)
   · Streamlit Cloud ready · version-safe API shims
 
@@ -151,7 +150,6 @@ if not _LOGGER.handlers:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _st_pyplot(fig: plt.Figure) -> None:
-    """st.pyplot with fallback across Streamlit versions."""
     try:
         st.pyplot(fig, width="stretch")
     except TypeError:
@@ -159,7 +157,6 @@ def _st_pyplot(fig: plt.Figure) -> None:
 
 
 def _st_dataframe(df: pd.DataFrame, *, hide_index: bool = True) -> None:
-    """st.dataframe with fallback across Streamlit versions."""
     try:
         st.dataframe(df, hide_index=hide_index, width="stretch")
     except TypeError:
@@ -167,7 +164,6 @@ def _st_dataframe(df: pd.DataFrame, *, hide_index: bool = True) -> None:
 
 
 def _st_plotly(fig) -> None:
-    """st.plotly_chart with fallback across Streamlit versions."""
     try:
         st.plotly_chart(fig, width="stretch")
     except TypeError:
@@ -419,26 +415,7 @@ def _safe_chart(fn, *args, **kwargs) -> None:
 def _chart_card(fn, *args, **kwargs) -> None:
     """Render a chart inside a scoped card wrapper."""
     with st.container(border=True):
-        st.markdown('<div class="chart-card-scope"></div>',
-                    unsafe_allow_html=True)
         _safe_chart(fn, *args, **kwargs)
-
-
-def _chapter(num: int, eyebrow: str, title: str, subtitle: str) -> None:
-    """Render a chapter header — anchors the story, guides the reader."""
-    st.markdown(
-        f"""
-        <div class="chapter-header">
-          <div class="chapter-badge">CHAPTER {num}</div>
-          <div class="chapter-body">
-            <div class="chapter-eyebrow">{eyebrow}</div>
-            <h3 class="chapter-title">{title}</h3>
-            <p class="chapter-subtitle">{subtitle}</p>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -606,12 +583,7 @@ def _cohens_verdict(d: float) -> str:
 
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    """ADVANCED: severity-aware punctuality → satisfaction analysis.
-
-    Chart card contains: dual-panel bar (mean + detractor) and the
-    verdict. The what-if slider + metrics + sensitivity table render
-    *outside* the card so they breathe properly.
-    """
+    """ADVANCED: severity-aware punctuality → satisfaction analysis."""
     st.markdown("### Delivery Punctuality vs Satisfaction")
     st.caption(
         "Severity-tiered dose-response · statistical confidence · "
@@ -734,7 +706,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         unsafe_allow_html=True,
     )
 
-    # What-if scenario — rendered OUTSIDE the chart card for proper spacing
+    # What-if scenario
     st.markdown("#### 🎛️ What-if: convert late orders to on-time")
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
         pct = st.slider(
@@ -1502,7 +1474,7 @@ GLOBAL_CSS: Final[str] = """
   }
   .stApp { background: var(--slate-50); }
   h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
-  .hero-label, .exec-summary-eyebrow, .chapter-title {
+  .hero-label, .exec-summary-eyebrow {
     font-family: 'Sora', 'Inter', sans-serif !important;
     letter-spacing: -0.015em;
   }
@@ -1557,41 +1529,11 @@ GLOBAL_CSS: Final[str] = """
     align-items: center;
   }
 
-  /* ── Chapter header ──────────────────────────────────────────────── */
-  .chapter-header {
-    display: flex; gap: var(--s4); align-items: flex-start;
-    padding: var(--s4) 0 var(--s3) 0;
-    margin-top: var(--s5);
+  /* ── Section divider (replaces chapter headers) ──────────────────── */
+  .section-divider {
+    margin: var(--s6) 0 var(--s4) 0;
+    padding-top: var(--s4);
     border-top: 1px solid var(--slate-200);
-  }
-  .chapter-badge {
-    flex-shrink: 0;
-    display: inline-flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
-    color: #FFFFFF; font-family: 'Sora', sans-serif;
-    font-size: 0.68rem; font-weight: 800;
-    letter-spacing: 0.14em; text-transform: uppercase;
-    padding: var(--s2) var(--s3); border-radius: var(--s2);
-    box-shadow: 0 2px 8px rgba(79,70,229,0.25);
-    min-width: 100px;
-  }
-  .chapter-body { flex: 1; min-width: 0; }
-  .chapter-eyebrow {
-    font-size: 0.72rem; font-weight: 700;
-    letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--accent-dark); margin-bottom: 2px;
-  }
-  .chapter-title {
-    font-size: var(--fs-h2) !important;
-    font-weight: 800 !important;
-    color: var(--ink) !important;
-    margin: 0 0 var(--s2) 0 !important;
-    padding: 0 !important;
-    line-height: 1.25 !important;
-  }
-  .chapter-subtitle {
-    font-size: var(--fs-body); color: var(--slate-600);
-    margin: 0; line-height: 1.55;
   }
 
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
@@ -1648,6 +1590,45 @@ GLOBAL_CSS: Final[str] = """
   }
   section[data-testid="stSidebar"] .stButton > button:hover {
     background: var(--brand-dark) !important;
+  }
+
+  /* Sidebar radio (nav tabs) — restyle as stacked pills */
+  section[data-testid="stSidebar"] div[role="radiogroup"] {
+    display: flex; flex-direction: column; gap: var(--s1);
+    padding-top: var(--s1);
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] label {
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(165,180,252,0.18) !important;
+    border-radius: var(--s2) !important;
+    padding: var(--s2) var(--s3) !important;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+    background: rgba(165,180,252,0.14) !important;
+    border-color: rgba(165,180,252,0.4) !important;
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+    /* hide the radio dot */
+    display: none !important;
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+    color: #E2E8F0 !important;
+    font-weight: 600 !important;
+    font-size: 0.92rem !important;
+    margin: 0 !important;
+  }
+  /* Active nav item */
+  section[data-testid="stSidebar"] div[role="radiogroup"] label[data-checked="true"],
+  section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%) !important;
+    border-color: var(--brand-light) !important;
+    box-shadow: 0 2px 10px rgba(79,70,229,0.35);
+  }
+  section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
   }
 
   .sidebar-warning {
@@ -1734,25 +1715,6 @@ GLOBAL_CSS: Final[str] = """
   [data-testid="stVerticalBlockBorderWrapper"] h3 {
     margin-top: 0 !important;
   }
-
-  /* ── Tabs ────────────────────────────────────────────────────────── */
-  button[data-baseweb="tab"] {
-    color: var(--slate-500); font-weight: 600; font-size: var(--fs-body);
-    padding: var(--s3) var(--s5) !important;
-    border-radius: var(--s2) var(--s2) 0 0;
-    transition: background 0.15s ease, color 0.15s ease;
-    font-family: 'Sora', 'Inter', sans-serif !important;
-  }
-  button[data-baseweb="tab"]:hover {
-    background: var(--slate-100);
-    color: var(--brand);
-  }
-  button[data-baseweb="tab"][aria-selected="true"] {
-    color: var(--brand);
-    border-bottom-color: var(--brand);
-    border-bottom-width: 3px;
-  }
-  [data-baseweb="tab-highlight"] { background-color: var(--brand); }
 
   /* ── Buttons ─────────────────────────────────────────────────────── */
   .stButton > button {
@@ -2025,7 +1987,6 @@ GLOBAL_CSS: Final[str] = """
   /* ── Intermediate breakpoint (tablets) ───────────────────────────── */
   @media (max-width: 1100px) {
     .app-hero { padding: var(--s5); }
-    .chapter-header { gap: var(--s3); }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
     [data-testid="stMetric"] { padding: var(--s4); }
@@ -2041,8 +2002,6 @@ GLOBAL_CSS: Final[str] = """
     }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
-    .chapter-header { flex-direction: column; gap: var(--s2); }
-    .chapter-badge { min-width: auto; }
   }
 </style>
 """
@@ -2081,11 +2040,35 @@ def _apply_global_style() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §9  SIDEBAR
+# §9  SIDEBAR — Navigation tabs at the top, filters below
 # ════════════════════════════════════════════════════════════════════════════
 
-def render_sidebar() -> tuple[str, tuple[str, ...]]:
-    st.sidebar.title("🎛️ Filters")
+NAV_TABS: Final[tuple[str, ...]] = (
+    "📈  Overview",
+    "⭐  Customer Satisfaction",
+    "🔬  Detail & Method",
+    "💡  Recommendations",
+)
+
+
+def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
+    # ── 1. Navigation tabs (TOP of sidebar) ────────────────────────────
+    st.sidebar.markdown(
+        '<div class="sidebar-nav-label">Navigation</div>',
+        unsafe_allow_html=True,
+    )
+    active_tab = st.sidebar.radio(
+        "Navigation",
+        options=NAV_TABS,
+        index=0,
+        key="active_tab",
+        label_visibility="collapsed",
+    )
+
+    st.sidebar.divider()
+
+    # ── 2. Filters (below the tabs) ────────────────────────────────────
+    st.sidebar.subheader("🎛️ Filters")
     st.sidebar.caption(
         "Both filters apply to **every KPI and chart**. "
         "Set both to *All* to reproduce the reference values."
@@ -2139,16 +2122,20 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
         f"| Late | {REF['late_deliveries']:,} |\n"
         f"| Avg Delivery Days | {REF['avg_delivery_days']:.2f} |"
     )
-    return year, states_tuple
+    return active_tab, year, states_tuple
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §10  TAB 1 — OVERVIEW  (Chapters 1-3)
+# §10  VIEW — Overview
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_overview(year: str, states: tuple[str, ...],
                     filter_active: bool) -> None:
-    st.markdown("## 📈 Overview — the shape of the business")
+    st.markdown("## 📈 Overview")
+    st.markdown(
+        "The shape of the business across the current selection — volume, "
+        "sentiment, and year contribution at a glance."
+    )
 
     if is_partial_year(year):
         detail = {
@@ -2167,13 +2154,7 @@ def render_overview(year: str, states: tuple[str, ...],
             unsafe_allow_html=True,
         )
 
-    # ── Chapter 1 — KPI strip ──────────────────────────────────────────
-    _chapter(
-        1, "Volume & sentiment",
-        "How much business, and how satisfied?",
-        "Five headline KPIs across the current selection — these anchor the "
-        "story before we go into the charts.",
-    )
+    # ── KPI strip ──────────────────────────────────────────────────────
     k = query_kpis(year, states)
     c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
@@ -2206,87 +2187,47 @@ def render_overview(year: str, states: tuple[str, ...],
 
     render_headline_strip(year, states)
 
-    # ── Chapter 2 — Review distribution (full-width) ───────────────────
-    _chapter(
-        2, "Rating distribution",
-        "Where do the reviews land?",
-        "The full 1–5★ spread — shows the volume of delight (5★) versus "
-        "damage (1–2★) before we ask *why*.",
-    )
+    # ── Review distribution ────────────────────────────────────────────
     _chart_card(chart_review_distribution, year, states)
 
-    # ── Chapter 3 — Volume by year (full-width) ────────────────────────
-    _chapter(
-        3, "Volume by year",
-        "When did the reviews happen?",
-        "Year contribution — flags the partial years (2016, 2018) so nobody "
-        "misreads the trend.",
-    )
+    # ── Review volume by year ──────────────────────────────────────────
     _chart_card(chart_review_volume_by_year, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §11  TAB 2 — CUSTOMER SATISFACTION  (Chapters 4-8)
+# §11  VIEW — Customer Satisfaction
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("## ⭐ Customer Satisfaction — the decision story")
+    st.markdown("## ⭐ Customer Satisfaction")
 
     render_headline_hero(year, states)
     render_decision_snapshot(year, states)
 
-    # ── Chapter 4 — Evidence ───────────────────────────────────────────
-    _chapter(
-        4, "Evidence — driver",
-        "Does lateness hurt satisfaction?",
-        "Severity-tiered dose-response, plus a statistical verdict and a "
-        "what-if calculator. This is the core finding of the analysis.",
-    )
+    st.divider()
+
+    # Evidence — driver
     _chart_card(chart_punctuality_vs_satisfaction, year, states)
 
-    # ── Chapter 5 — Timing ─────────────────────────────────────────────
-    _chapter(
-        5, "Timing — when",
-        "Where in the delivery window does satisfaction collapse?",
-        "Days from purchase to delivery, bucketed — reveals the exact "
-        "threshold where ratings begin to drop.",
-    )
+    # Timing
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    # ── Chapter 6 — Geography (2-up) ───────────────────────────────────
-    _chapter(
-        6, "Geography — where",
-        "Which states over- and under-perform?",
-        "Two views side by side — satisfaction by state and the on-time "
-        "vs late split for the highest-volume states.",
-    )
+    # Geography (2-up)
     col_a, col_b = st.columns(2, gap="medium")
     with col_a:
         _chart_card(chart_state_scores, year, states)
     with col_b:
         _chart_card(chart_ontime_by_state, year, states)
 
-    # ── Chapter 7 — Trend ──────────────────────────────────────────────
-    _chapter(
-        7, "Trend — over time",
-        "How has satisfaction moved month to month?",
-        "Monthly average review score across the whole period — the "
-        "trajectory matters as much as the level.",
-    )
+    # Trend
     _chart_card(chart_monthly_score, year, states)
 
-    # ── Chapter 8 — Map ────────────────────────────────────────────────
-    _chapter(
-        8, "Geography — map",
-        "Where does the volume sit?",
-        "Delivered orders by state on the map — the geographic backbone "
-        "of the whole analysis. Selected states are coloured; the rest are greyed.",
-    )
+    # Map
     _chart_card(chart_brazil_map, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §12  TAB 3 — DETAIL & METHOD  (Chapters 9-10)
+# §12  VIEW — Detail & Method
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_detail(year: str, states: tuple[str, ...]) -> None:
@@ -2296,12 +2237,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "read before quoting the numbers in a decision."
     )
 
-    # ── Chapter 9 — Limitations ────────────────────────────────────────
-    _chapter(
-        9, "Limitations",
-        "What to keep in mind",
-        "Seven caveats that scope every claim in this dashboard.",
-    )
+    st.markdown("### Limitations")
 
     info_card(
         "L1 — Association, not causation",
@@ -2366,12 +2302,11 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         variant="info", tags=["Sample size", "Filters"],
     )
 
-    # ── Chapter 10 — Diagnostics ───────────────────────────────────────
-    _chapter(
-        10, "Diagnostics",
-        "Whole-dataset integrity checks",
+    st.divider()
+    st.markdown("### Whole-dataset diagnostics")
+    st.caption(
         "Counts computed across the entire dataset — these do not respond "
-        "to the filters because they describe the source data itself.",
+        "to the filters because they describe the source data itself."
     )
 
     frames = load_data()
@@ -2419,7 +2354,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §13  TAB 4 — RECOMMENDATIONS  (Chapters 11-12)
+# §13  VIEW — Recommendations
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations() -> None:
@@ -2431,21 +2366,13 @@ def render_recommendations() -> None:
         "because someone narrowed the view."
     )
 
-    # ── Chapter 11 — Prioritisation ────────────────────────────────────
-    _chapter(
-        11, "Prioritisation",
-        "What to do first",
-        "Impact × effort — top-left is the highest-leverage quadrant. "
-        "R2 and R5 are quick wins; R1 is the largest ceiling.",
-    )
     render_priority_matrix()
 
-    # ── Chapter 12 — Action plan ───────────────────────────────────────
-    _chapter(
-        12, "Action plan",
-        "Five prioritised recommendations",
+    st.divider()
+    st.markdown("### Prioritised recommendations")
+    st.caption(
         "Each card carries evidence, action, lead and measures — ready to "
-        "hand to the team that owns it.",
+        "hand to the team that owns it."
     )
 
     info_card(
@@ -2522,7 +2449,6 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    # ── CRITICAL: set_page_config MUST be the first Streamlit call ──────
     st.set_page_config(
         page_title="Customer Satisfaction · Olist",
         page_icon="📊",
@@ -2540,6 +2466,7 @@ def main() -> None:
 
     st.session_state.setdefault("filter_year", "All")
     st.session_state.setdefault("filter_states", [])
+    st.session_state.setdefault("active_tab", NAV_TABS[0])
 
     try:
         load_data()
@@ -2552,10 +2479,10 @@ def main() -> None:
         )
         st.stop()
 
-    year, states = render_sidebar()
-    k_live = query_kpis(year, states)   # live values for hero meta
+    active_tab, year, states = render_sidebar()
+    k_live = query_kpis(year, states)
 
-    # ── Hero header — LARGE, layered, attention-grabbing ────────────────
+    # ── Hero header ─────────────────────────────────────────────────────
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
         if k_live["avg_review_score"] else f"{REF['avg_review_score']:.2f}★"
@@ -2586,21 +2513,16 @@ def main() -> None:
 
     st.write("")
 
-    tab_overview, tab_theme, tab_detail, tab_recs = st.tabs([
-        "📈 Overview",
-        "⭐ Customer Satisfaction",
-        "🔬 Detail & Method",
-        "💡 Recommendations",
-    ])
-
+    # ── Main content driven by sidebar navigation ───────────────────────
     filter_active = year != "All" or bool(states)
-    with tab_overview:
+
+    if active_tab == NAV_TABS[0]:
         render_overview(year, states, filter_active=filter_active)
-    with tab_theme:
+    elif active_tab == NAV_TABS[1]:
         render_theme(year, states)
-    with tab_detail:
+    elif active_tab == NAV_TABS[2]:
         render_detail(year, states)
-    with tab_recs:
+    else:
         render_recommendations()
 
     st.divider()
