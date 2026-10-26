@@ -8,6 +8,7 @@ Professional, decision-first dashboard.
   · Navigation tabs in the sidebar · cached pandas layer
   · Advanced punctuality module (severity tiers, CI, what-if)
   · Streamlit Cloud ready · version-safe API shims
+  · PORA Academy logo integrated in the hero header
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
@@ -17,6 +18,7 @@ Optional: scipy (statistical CI), plotly (interactive matrix)
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import logging
 import os
@@ -41,6 +43,9 @@ PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
 PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
+
+# Public URL fallback for the logo
+PORA_LOGO_URL: Final[str] = "https://i.ibb.co/3W1zS7v/pora-logo.png"
 
 REF = {
     "total_orders":      99_441,
@@ -168,6 +173,25 @@ def _st_plotly(fig) -> None:
         st.plotly_chart(fig, width="stretch")
     except TypeError:
         st.plotly_chart(fig, use_container_width=True)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# §2.y  LOGO HELPER
+# ════════════════════════════════════════════════════════════════════════════
+
+def _get_logo_base64() -> str:
+    """Attempts to load a local logo, falls back to the public URL."""
+    # Check for a local file first
+    local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pora_logo.png")
+    if os.path.isfile(local_path):
+        try:
+            with open(local_path, "rb") as f:
+                return base64.b64encode(f.read()).decode()
+        except Exception:
+            pass  # Fall through to URL
+    
+    # Fallback: return the URL directly (browser will fetch it)
+    return PORA_LOGO_URL
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1480,14 +1504,27 @@ GLOBAL_CSS: Final[str] = """
   }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
-  /* ── App hero (BIG title) ────────────────────────────────────────── */
+  /* ── App hero (BIG title + logo) ────────────────────────────────── */
   .app-hero {
+    display: flex;
+    align-items: center;
+    gap: var(--s6);
     background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--s5);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
     box-shadow: 0 4px 24px rgba(79,70,229,0.08);
+  }
+  .app-hero-logo {
+    flex-shrink: 0;
+    width: 120px;
+    height: auto;
+    object-fit: contain;
+  }
+  .app-hero-content {
+    flex: 1;
+    min-width: 0;
   }
   .app-hero-eyebrow {
     font-size: 0.78rem; font-weight: 800;
@@ -1986,7 +2023,8 @@ GLOBAL_CSS: Final[str] = """
 
   /* ── Intermediate breakpoint (tablets) ───────────────────────────── */
   @media (max-width: 1100px) {
-    .app-hero { padding: var(--s5); }
+    .app-hero { flex-direction: column; align-items: flex-start; padding: var(--s5); gap: var(--s4); }
+    .app-hero-logo { width: 90px; }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
     [data-testid="stMetric"] { padding: var(--s4); }
@@ -2482,7 +2520,8 @@ def main() -> None:
     active_tab, year, states = render_sidebar()
     k_live = query_kpis(year, states)
 
-    # ── Hero header ─────────────────────────────────────────────────────
+    # ── Hero header (with Logo) ─────────────────────────────────────────
+    logo_src = _get_logo_base64()
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
         if k_live["avg_review_score"] else f"{REF['avg_review_score']:.2f}★"
@@ -2490,19 +2529,22 @@ def main() -> None:
     st.markdown(
         f"""
         <div class="app-hero">
-          <div class="app-hero-eyebrow">PORA Academy · Cohort 7 · Capstone</div>
-          <div class="app-hero-title">
-            Customer <b>Satisfaction</b> Dashboard
-          </div>
-          <p class="app-hero-sub">
-            A decision-first view of 99,000+ Olist orders.
-            Delivery punctuality is the strongest satisfaction driver —
-            late orders lose <b>{REF['star_gap']:.2f}★</b> on average.
-          </p>
-          <div class="app-hero-meta">
-            <span class="scope-pill">Scope: {scope_label(year, states)}</span>
-            <span class="scope-pill-subtle">📦 {k_live['total_orders']:,} orders</span>
-            <span class="scope-pill-subtle">⭐ {avg_live} avg</span>
+          <img src="{logo_src}" class="app-hero-logo" alt="PORA Academy Logo">
+          <div class="app-hero-content">
+            <div class="app-hero-eyebrow">PORA Academy · Cohort 7 · Capstone</div>
+            <div class="app-hero-title">
+              Customer <b>Satisfaction</b> Dashboard
+            </div>
+            <p class="app-hero-sub">
+              A decision-first view of 99,000+ Olist orders.
+              Delivery punctuality is the strongest satisfaction driver —
+              late orders lose <b>{REF['star_gap']:.2f}★</b> on average.
+            </p>
+            <div class="app-hero-meta">
+              <span class="scope-pill">Scope: {scope_label(year, states)}</span>
+              <span class="scope-pill-subtle">📦 {k_live['total_orders']:,} orders</span>
+              <span class="scope-pill-subtle">⭐ {avg_live} avg</span>
+            </div>
           </div>
         </div>
         """,
