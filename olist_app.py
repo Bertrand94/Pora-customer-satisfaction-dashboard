@@ -3,13 +3,16 @@
 Phase 2c Capstone — Group 1: Customer Satisfaction
 PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
 
-Decision-first dashboard · teal/coral palette · cached in-memory pandas
-layer · lazy tab rendering · narrative-ordered charts · Streamlit Cloud ready.
+Professional, decision-first dashboard.
+  · Modern indigo/coral palette · Sora + Inter + JetBrains Mono
+  · Cached pandas layer · lazy tab rendering · narrative chart order
+  · Advanced punctuality module (severity tiers, CI, what-if)
+  · Streamlit Cloud ready
 
 Deploy:   streamlit run olist_app.py
 Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
 Requires: streamlit, pandas, matplotlib, requests
-Optional: scipy (enables statistical CI in the advanced punctuality chart)
+Optional: scipy (statistical CI), plotly (interactive hover)
 """
 
 from __future__ import annotations
@@ -31,10 +34,9 @@ from matplotlib.ticker import FuncFormatter
 # §1  CONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-CHART_FIGSIZE: Final[tuple[float, float]] = (8.2, 4.6)
+CHART_FIGSIZE: Final[tuple[float, float]] = (8.6, 4.8)
 PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
 
-# Advanced punctuality-chart tunables
 PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
@@ -53,13 +55,15 @@ REF = {
 
 @dataclass(frozen=True)
 class Palette:
-    primary:       str = "#0D9488"
-    primary_light: str = "#5EEAD4"
-    primary_dark:  str = "#115E59"
-    accent:        str = "#F97316"
-    accent_light:  str = "#FDBA74"
-    accent_dark:   str = "#C2410C"
+    # ── Brand: modern indigo + coral ────────────────────────────────────
+    primary:       str = "#4F46E5"   # indigo-600
+    primary_light: str = "#A5B4FC"   # indigo-300
+    primary_dark:  str = "#3730A3"   # indigo-800
+    accent:        str = "#F97316"   # orange-500
+    accent_light:  str = "#FDBA74"   # orange-300
+    accent_dark:   str = "#C2410C"   # orange-700
 
+    # ── Semantic ────────────────────────────────────────────────────────
     success:       str = "#10B981"
     success_light: str = "#6EE7B7"
     warn:          str = "#F59E0B"
@@ -67,6 +71,7 @@ class Palette:
     danger:        str = "#E11D48"
     danger_light:  str = "#FDA4AF"
 
+    # ── Neutrals ────────────────────────────────────────────────────────
     ink:           str = "#0F172A"
     ink_soft:      str = "#1E293B"
     slate_700:     str = "#334155"
@@ -325,7 +330,8 @@ def _no_data(msg: str = "No data for the current filters.") -> None:
         <div class="empty-state">
           <div class="empty-icon">📭</div>
           <div class="empty-title">Nothing to show</div>
-          <div class="empty-body">{msg} Try widening the Year or State filters.</div>
+          <div class="empty-body">{msg}</div>
+          <div class="empty-hint">💡 Try widening the Year or State filters in the sidebar.</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -336,8 +342,11 @@ def _insight(year: str, states: Sequence[str], text: str) -> None:
     st.markdown(
         f"""
         <div class="insight">
-          <span class="insight-scope">{scope_label(year, states)}</span>
-          <span class="insight-text">{text}</span>
+          <span class="insight-chip">💡 Insight</span>
+          <div class="insight-body">
+            <span class="insight-scope">{scope_label(year, states)}</span>
+            <span class="insight-text">{text}</span>
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -372,22 +381,21 @@ def _partial_note(year: str) -> None:
     st.caption(f"⚠️ **Partial year — {year}.** {detail}")
 
 
-def _safe_chart(fn, *args) -> None:
+def _safe_chart(fn, *args, **kwargs) -> None:
     try:
-        fn(*args)
+        fn(*args, **kwargs)
     except Exception as exc:
         _LOGGER.exception("Chart %s failed", fn.__name__)
         st.warning(f"⚠️ This chart could not render: {exc}")
 
 
 def _chart_card(fn, *args, **kwargs) -> None:
-    """Render a chart inside a bordered container for visual grouping."""
     with st.container(border=True):
         _safe_chart(fn, *args, **kwargs)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6  CHARTS
+# §6  CHARTS — Overview
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
@@ -412,7 +420,7 @@ def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(counts.index.astype(str), counts.values, color=shades,
-                  edgecolor=PALETTE.white, linewidth=1.2)
+                  edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Review Score Distribution", pad=14, loc="left")
     ax.set_xlabel("Review score (stars)")
     ax.set_ylabel("Number of reviews")
@@ -450,7 +458,7 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
     ]
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.barh(counts.index.astype(str), counts.values, color=colors,
-                   edgecolor=PALETTE.white, linewidth=1.2)
+                   edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Review Volume Share by Year", pad=14, loc="left")
     ax.set_xlabel("Number of reviews")
     ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
@@ -479,11 +487,9 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
 
 # ════════════════════════════════════════════════════════════════════════════
 # §6.x  ADVANCED — Delivery Punctuality vs Satisfaction
-#       Severity tiers · effect size · business projection · sensitivity
 # ════════════════════════════════════════════════════════════════════════════
 
 def _late_severity(days_late: pd.Series) -> pd.Series:
-    """Map days-late (delivered − estimated) to a 4-level severity tier."""
     out = pd.Series("On Time", index=days_late.index, dtype="object")
     out = out.mask(days_late.between(1, 3), "Slightly Late")
     out = out.mask(days_late.between(4, 7), "Moderately Late")
@@ -494,7 +500,6 @@ def _late_severity(days_late: pd.Series) -> pd.Series:
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def _punctuality_frame(year: str,
                        states_tuple: tuple[str, ...]) -> pd.DataFrame:
-    """Cached, filter-aware frame enriched with lateness severity + flags."""
     df = apply_filters(get_model(), year, list(states_tuple))
     df = df[df["is_delivered"] & df["review_score"].notna()].copy()
     if df.empty:
@@ -516,11 +521,6 @@ def _punctuality_frame(year: str,
 
 def _welch_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05
               ) -> tuple[float, float, float, float, float]:
-    """Welch t-test + 95% CI on (mean a − mean b) and Cohen's d.
-
-    Returns (diff, ci_low, ci_high, t_stat, cohens_d). If scipy is
-    unavailable, stats fields are NaN but `diff` is still returned.
-    """
     import numpy as np
     na, nb = len(a), len(b)
     diff = float(a.mean() - b.mean()) if na and nb else float("nan")
@@ -528,7 +528,7 @@ def _welch_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05
         return diff, float("nan"), float("nan"), float("nan"), float("nan")
 
     try:
-        from scipy import stats  # optional
+        from scipy import stats
         t, _p = stats.ttest_ind(a, b, equal_var=False, nan_policy="omit")
         va, vb = float(a.var(ddof=1)), float(b.var(ddof=1))
         se = float(np.sqrt(va / na + vb / nb))
@@ -559,19 +559,11 @@ def _cohens_verdict(d: float) -> str:
 
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    """ADVANCED: severity-aware punctuality → satisfaction analysis.
-
-    Panels
-    ------
-    1. Mean score by severity tier (left)
-    2. 1–2★ detractor share by severity tier (right)
-    3. Statistical verdict (Welch CI + Cohen's d on On-Time − Late)
-    4. Business-impact projection table (X% late→on-time scenarios)
-    """
+    """ADVANCED: severity-aware punctuality → satisfaction analysis."""
     st.markdown("### Delivery Punctuality vs Satisfaction")
     st.caption(
-        "Severity-tiered dose-response, statistical confidence, and "
-        "operational upside — the decision-grade version of the on-time/late gap."
+        "Severity-tiered dose-response · statistical confidence · "
+        "operational upside."
     )
 
     df = _punctuality_frame(year, states)
@@ -604,17 +596,15 @@ def chart_punctuality_vs_satisfaction(year: str,
     }
     colors = [tier_colors.get(str(t), PALETTE.slate_400) for t in grp.index]
 
-    # ── Dual-panel figure ────────────────────────────────────────────────
     fig, axes = plt.subplots(
         1, 2,
         figsize=(CHART_FIGSIZE[0], CHART_FIGSIZE[1] * 0.95),
-        gridspec_kw={"wspace": 0.30},
+        gridspec_kw={"wspace": 0.32},
     )
     ax1, ax2 = axes
 
-    # --- Left: mean score ----------------------------------------------
     bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
-                    color=colors, edgecolor=PALETTE.white, linewidth=1.2,
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
                     width=0.62)
     ax1.set_title("Mean score by lateness severity", pad=10, loc="left",
                   fontsize=12)
@@ -636,10 +626,9 @@ def chart_punctuality_vs_satisfaction(year: str,
                 linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
     ax1.legend(loc="lower left", frameon=False, fontsize=9)
 
-    # --- Right: detractor rate -----------------------------------------
     ymax = max(5.0, float((grp["detractor_rate"] * 100).max()) * 1.25)
     bars2 = ax2.bar(grp.index.astype(str), grp["detractor_rate"] * 100,
-                    color=colors, edgecolor=PALETTE.white, linewidth=1.2,
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
                     width=0.62)
     ax2.set_title("1–2★ detractor share by severity", pad=10, loc="left",
                   fontsize=12)
@@ -658,27 +647,24 @@ def chart_punctuality_vs_satisfaction(year: str,
 
     _finish(fig)
 
-    # ── Statistical verdict ──────────────────────────────────────────────
+    # Statistical verdict
     on_time_scores = df.loc[df["severity"] == "On Time", "review_score"]
     late_scores    = df.loc[df["severity"] != "On Time", "review_score"]
     n_on, n_late = len(on_time_scores), len(late_scores)
 
     if n_on >= PUNCT_MIN_N_STATUS and n_late >= PUNCT_MIN_N_STATUS:
         diff, ci_lo, ci_hi, t_stat, d = _welch_ci(on_time_scores, late_scores)
-        robust = (
-            ci_lo == ci_lo and ci_hi == ci_hi and ci_lo > 0
-        )
-        sig = "✅ statistically robust" if robust else \
-              "⚠️ CI includes 0 — inconclusive"
+        robust = (ci_lo == ci_lo and ci_hi == ci_hi and ci_lo > 0)
+        sig = ("✅ statistically robust" if robust
+               else "⚠️ CI includes 0 — inconclusive")
         d_txt = (f"{d:.2f} ({_cohens_verdict(d)})"
                  if d == d else "n/a (scipy unavailable)")
         ci_txt = (f"[{ci_lo:+.2f}, {ci_hi:+.2f}]"
                   if ci_lo == ci_lo else "n/a")
         verdict = (
             f"<b>On-Time − Late gap: {diff:+.2f}★</b> "
-            f"(95% CI {ci_txt}) · Welch t = "
-            f"{t_stat:.2f} · Cohen's d = {d_txt} · "
-            f"n_on={n_on:,}, n_late={n_late:,} · {sig}"
+            f"(95% CI {ci_txt}) · Welch t = {t_stat:.2f} · "
+            f"Cohen's d = {d_txt} · n_on={n_on:,}, n_late={n_late:,} · {sig}"
         )
     else:
         verdict = (
@@ -688,57 +674,76 @@ def chart_punctuality_vs_satisfaction(year: str,
         )
     st.markdown(
         f"""
-        <div class="insight" style="border-left-color:{PALETTE.primary};">
-          <span class="insight-scope">Statistical verdict</span>
-          <span class="insight-text">{verdict}</span>
+        <div class="verdict-card">
+          <span class="verdict-label">📊 Statistical verdict</span>
+          <span class="verdict-text">{verdict}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    # ── Business-impact projection ───────────────────────────────────────
+    # What-if scenario — interactive slider
+    st.markdown("#### 🎛️ What-if: convert late orders to on-time")
+    if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
+        pct = st.slider(
+            "Percentage of late orders made on-time",
+            min_value=0, max_value=100, value=10, step=5,
+            key=f"whatif_{year}_{len(states)}",
+            help="Projects the effect on the selection average. "
+                 "Assumes converted orders land at the on-time mean.",
+        )
+        on_mean = float(on_time_scores.mean())
+        late_mean = float(late_scores.mean())
+        new_total = n_on + n_late
+        converted = n_late * pct / 100.0
+        new_mean = (n_on * on_mean
+                    + (n_late - converted) * late_mean
+                    + converted * on_mean) / new_total
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Late orders fixed", f"{converted:,.0f}",
+                  delta=f"{pct}% of {n_late:,}")
+        c2.metric("Expected avg score", f"{new_mean:.3f}★")
+        c3.metric("Δ vs current", f"{new_mean - sel_avg:+.3f}★",
+                  delta_color="normal")
+    else:
+        st.caption("Widen the filters to enable the what-if calculator.")
+
+    # Business-impact projection table (full scenarios, all at once)
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
         on_mean = float(on_time_scores.mean())
         late_mean = float(late_scores.mean())
         new_total = n_on + n_late
-
         scen_rows = []
-        for pct in PUNCT_SCENARIOS:
-            converted = n_late * pct / 100.0
-            new_mean = (
-                n_on * on_mean
-                + (n_late - converted) * late_mean
-                + converted * on_mean
-            ) / new_total
+        for p in PUNCT_SCENARIOS:
+            conv = n_late * p / 100.0
+            nm = (n_on * on_mean
+                  + (n_late - conv) * late_mean
+                  + conv * on_mean) / new_total
             scen_rows.append({
-                "Scenario":           f"{pct}% of late → on-time",
-                "Late orders fixed":  f"{converted:,.0f}",
-                "Expected avg score": f"{new_mean:.3f}",
-                "Δ vs current":       f"{new_mean - sel_avg:+.3f}★",
+                "Scenario":           f"{p}% of late → on-time",
+                "Late orders fixed":  f"{conv:,.0f}",
+                "Expected avg score": f"{nm:.3f}",
+                "Δ vs current":       f"{nm - sel_avg:+.3f}★",
             })
-        st.markdown("**Business-impact projection** *(ceteris paribus)*")
-        st.dataframe(pd.DataFrame(scen_rows),
-                     hide_index=True, width="stretch")
-        lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
-        st.caption(
-            f"Assumes converted orders land at the on-time mean "
-            f"({on_mean:.2f}★). Stars gained per 1% of late orders "
-            f"converted = **{lift_1pct:+.4f}★**."
-        )
+        with st.expander("📋 Full sensitivity table (5%, 10%, 25%, 50%)",
+                         expanded=False):
+            st.dataframe(pd.DataFrame(scen_rows),
+                         hide_index=True, width="stretch")
+            lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
+            st.caption(
+                f"Stars gained per 1% of late orders converted = "
+                f"**{lift_1pct:+.4f}★**."
+            )
 
-    # ── Insight line (preserves existing contract) ───────────────────────
+    # Insight line
     if len(grp) > 1:
         worst = grp["avg_score"].idxmin()
         best  = grp["avg_score"].idxmax()
-        gap_ot_late = (
-            float(on_time_scores.mean() - late_scores.mean())
-            if n_on and n_late else float("nan")
-        )
+        gap_ot_late = (float(on_time_scores.mean() - late_scores.mean())
+                       if n_on and n_late else float("nan"))
         noisy = int((~grp["reliable"]).sum())
-        noisy_txt = (
-            f" {noisy} tier(s) flagged ⚠️ (n < {PUNCT_MIN_N_TIER})."
-            if noisy else ""
-        )
+        noisy_txt = (f" {noisy} tier(s) flagged ⚠️ (n < {PUNCT_MIN_N_TIER})."
+                     if noisy else "")
         top_det = grp["detractor_rate"].idxmax()
         _insight(
             year, states,
@@ -753,7 +758,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         only = grp.index[0]
         _insight(
             year, states,
-            f"Only the '{only}' tier is populated in this selection "
+            f"Only the '{only}' tier is populated "
             f"({grp.iloc[0]['avg_score']:.2f}★, "
             f"n={int(grp.iloc[0]['orders']):,}) — no on-time vs late "
             "comparison is possible."
@@ -802,7 +807,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.bar(grp["bucket"].astype(str), grp["avg_score"],
-                  color=colors, edgecolor=PALETTE.white, linewidth=1.2)
+                  color=colors, edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title("Satisfaction by Delivery-Time Bucket",
                  pad=14, loc="left")
     ax.set_xlabel("Days from purchase to delivery")
@@ -837,7 +842,6 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
-    """Average Review Score by State (top 10 by orders). Filter-aware."""
     df = apply_filters(get_model(), year, list(states))
     df = df[df["review_score"].notna() & df["customer_state"].notna()]
 
@@ -867,7 +871,7 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
     bars = ax.barh(plot_df["customer_state"], plot_df["avg_score"],
-                   color=colors, edgecolor=PALETTE.white, linewidth=1.2)
+                   color=colors, edgecolor=PALETTE.white, linewidth=1.4)
     ax.set_title(
         f"Average Review Score by State ({title_cap} {scope_txt})",
         pad=14, loc="left",
@@ -1158,11 +1162,9 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         return
     lo_s, lo_v = min(in_scope_pairs, key=lambda x: x[1])
     hi_s, hi_v = max(in_scope_pairs, key=lambda x: x[1])
-    mode = (
-        "Selected states coloured; rest greyed."
-        if filter_active else
-        "All 27 states coloured by delivered count."
-    )
+    mode = ("Selected states coloured; rest greyed."
+            if filter_active else
+            "All 27 states coloured by delivered count.")
     _insight(year, states,
              f"{lo_s} ({int(lo_v):,}) fewest; {hi_s} ({int(hi_v):,}) most "
              f"in scope. {mode}")
@@ -1245,9 +1247,7 @@ def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
           <div class="hero-icon">⚡</div>
           <div class="hero-text">
             <span class="hero-label">Headline finding · {scope}</span>
-            <p class="hero-headline">
-              {body}
-            </p>
+            <p class="hero-headline">{body}</p>
           </div>
         </div>
         """,
@@ -1296,6 +1296,116 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
     )
 
 
+def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
+    """Top-of-page executive summary — one glance, one decision."""
+    k = query_kpis(year, states)
+    g = query_headline_gap(year, states)
+
+    # Verdict tier
+    if g["gap"] is None:
+        verdict_txt, verdict_color = "Inconclusive", PALETTE.slate_500
+    elif g["gap"] >= 1.5:
+        verdict_txt, verdict_color = "Critical priority", PALETTE.danger
+    elif g["gap"] >= 1.0:
+        verdict_txt, verdict_color = "High priority", PALETTE.warn
+    elif g["gap"] >= 0.5:
+        verdict_txt, verdict_color = "Moderate", PALETTE.accent
+    else:
+        verdict_txt, verdict_color = "Healthy", PALETTE.success
+
+    gap_txt = f"{g['gap']:.2f}★" if g["gap"] is not None else "—"
+    avg_txt = f"{k['avg_review_score']:.2f}★" if k["avg_review_score"] else "—"
+
+    st.markdown(
+        f"""
+        <div class="exec-summary">
+          <div class="exec-summary-main">
+            <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY</div>
+            <div class="exec-summary-title">
+              Delivery punctuality is the <b>#1 satisfaction lever</b>
+            </div>
+            <div class="exec-summary-detail">
+              Late orders lose <b style="color:{PALETTE.danger};">{gap_txt}</b>
+              on average versus on-time orders — a gap far larger than any
+              geographic difference. The current selection averages
+              <b>{avg_txt}</b> across <b>{k['total_orders']:,}</b> orders.
+            </div>
+          </div>
+          <div class="exec-summary-badge"
+               style="border-color:{verdict_color};
+                      background:{verdict_color}1A; color:{verdict_color};">
+            <span class="exec-summary-badge-label">Priority</span>
+            <span class="exec-summary-badge-value">{verdict_txt}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_priority_matrix() -> None:
+    """Interactive priority matrix — impact × effort, whole dataset."""
+    st.markdown("### 🎯 Priority Matrix — Impact × Effort")
+
+    items = pd.DataFrame([
+        {"id": "R1", "action": "Investigate RJ delivery failures",
+         "impact": 5, "effort": 3, "region": "RJ"},
+        {"id": "R2", "action": "Intervene before day 20 (ageing alerts)",
+         "impact": 5, "effort": 2, "region": "National"},
+        {"id": "R3", "action": "Recalibrate ETA dates",
+         "impact": 3, "effort": 3, "region": "National"},
+        {"id": "R4", "action": "Pilot improvement in BA",
+         "impact": 3, "effort": 4, "region": "BA"},
+        {"id": "R5", "action": "Promise reliability, not speed",
+         "impact": 4, "effort": 1, "region": "Brand"},
+    ])
+
+    # Try Plotly; fall back to matplotlib
+    try:
+        import plotly.express as px
+        fig = px.scatter(
+            items, x="effort", y="impact", text="id",
+            size=[14] * len(items),
+            color="impact",
+            color_continuous_scale=["#6EE7B7", "#FCD34D", "#FDA4AF"],
+            hover_data=["action", "region"],
+            range_x=[0.5, 5.5], range_y=[0.5, 5.5],
+        )
+        fig.update_traces(textposition="top center",
+                          textfont=dict(size=14, color=PALETTE.ink))
+        fig.update_layout(
+            height=420, margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="Effort →", yaxis_title="Impact →",
+            plot_bgcolor="white",
+        )
+        fig.add_hline(y=3.5, line_dash="dash", line_color="#CBD5E1")
+        fig.add_vline(x=2.5, line_dash="dash", line_color="#CBD5E1")
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
+        for _, r in items.iterrows():
+            c = (PALETTE.danger if r["impact"] >= 5
+                 else PALETTE.warn if r["impact"] >= 4
+                 else PALETTE.accent)
+            ax.scatter(r["effort"], r["impact"], s=300, color=c,
+                       edgecolor="white", linewidth=2, zorder=3)
+            ax.text(r["effort"], r["impact"] + 0.18, r["id"],
+                    ha="center", fontsize=11, fontweight="bold",
+                    color=PALETTE.ink)
+        ax.axhline(3.5, color=PALETTE.slate_300, linestyle="--", lw=1)
+        ax.axvline(2.5, color=PALETTE.slate_300, linestyle="--", lw=1)
+        ax.set_xlim(0.5, 5.5); ax.set_ylim(0.5, 5.5)
+        ax.set_xlabel("Effort →"); ax.set_ylabel("Impact →")
+        ax.set_title("Priority Matrix — Impact × Effort", loc="left")
+        _style_axes(ax)
+        _finish(fig)
+
+    st.caption(
+        "Top-left = **do first** (high impact, low effort). "
+        "R2 and R5 are quick wins; R1 is the highest-ceiling project."
+    )
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # §8  GLOBAL CSS
 # ════════════════════════════════════════════════════════════════════════════
@@ -1303,74 +1413,91 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
 GLOBAL_CSS: Final[str] = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 
 <style>
   :root {
-    --brand: #0D9488;
-    --brand-light: #5EEAD4;
-    --brand-dark: #115E59;
-    --accent: #F97316;
-    --success: #10B981;
-    --warn: #F59E0B;
-    --danger: #E11D48;
-    --ink: #0F172A;
-    --ink-soft: #1E293B;
-    --slate-700: #334155;
-    --slate-600: #475569;
-    --slate-500: #64748B;
-    --slate-400: #94A3B8;
-    --slate-300: #CBD5E1;
-    --slate-200: #E2E8F0;
-    --slate-100: #F1F5F9;
-    --slate-50: #F8FAFC;
-    --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
-    --s5: 24px; --s6: 32px; --s7: 48px;
+    --brand:        #4F46E5;
+    --brand-light:  #A5B4FC;
+    --brand-dark:   #3730A3;
+    --accent:       #F97316;
+    --accent-light: #FDBA74;
+    --success:      #10B981;
+    --warn:         #F59E0B;
+    --danger:       #E11D48;
+    --ink:          #0F172A;
+    --ink-soft:     #1E293B;
+    --slate-700:    #334155;
+    --slate-600:    #475569;
+    --slate-500:    #64748B;
+    --slate-400:    #94A3B8;
+    --slate-300:    #CBD5E1;
+    --slate-200:    #E2E8F0;
+    --slate-100:    #F1F5F9;
+    --slate-50:     #F8FAFC;
+    /* 8-pt spacing scale */
+    --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+    --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+    /* Fluid type scale */
+    --fs-display: clamp(1.6rem, 1.2rem + 1.2vw, 2.1rem);
+    --fs-h1:      clamp(1.4rem, 1.1rem + 1vw,   1.9rem);
+    --fs-h2:      clamp(1.2rem, 1.05rem + 0.6vw, 1.45rem);
+    --fs-h3:      clamp(1.05rem, 1rem + 0.3vw,   1.15rem);
+    --fs-body:    0.95rem;
+    --fs-small:   0.83rem;
+    --fs-micro:   0.72rem;
   }
 
   html, body, [class*="css"], .stApp {
     font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    font-size: 15px;
-    line-height: 1.6;
-    color: var(--ink);
+    font-size: 15px; line-height: 1.6; color: var(--ink);
+    -webkit-font-smoothing: antialiased;
   }
   .stApp { background: var(--slate-50); }
+  h1, h2, h3, .hero-headline, .exec-summary-title,
+  .hero-label, .exec-summary-eyebrow {
+    font-family: 'Sora', 'Inter', sans-serif !important;
+    letter-spacing: -0.015em;
+  }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
-  h1 { color: var(--ink); font-weight: 800; letter-spacing: -0.025em;
-       font-size: 34px; line-height: 1.2; }
-  h2 { color: var(--ink); font-weight: 700; letter-spacing: -0.018em;
-       font-size: 24px; line-height: 1.25;
-       margin-top: var(--s2) !important; margin-bottom: var(--s4) !important; }
-  h3 { color: var(--ink-soft); font-weight: 700; letter-spacing: -0.012em;
-       font-size: 18px; line-height: 1.3;
-       margin-top: 0 !important; margin-bottom: var(--s3) !important; }
-  h4 { color: var(--brand); font-size: 16px; font-weight: 700;
+  h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
+       line-height: 1.2; margin-bottom: var(--s2); }
+  h2 { color: var(--ink); font-weight: 700; font-size: var(--fs-h2);
+       line-height: 1.25; margin-top: var(--s3) !important;
+       margin-bottom: var(--s4) !important; }
+  h3 { color: var(--ink-soft); font-weight: 700; font-size: var(--fs-h3);
+       line-height: 1.3; margin-top: 0 !important;
+       margin-bottom: var(--s3) !important; }
+  h4 { color: var(--brand); font-size: 1rem; font-weight: 700;
        line-height: 1.35; margin-bottom: var(--s3) !important; }
-  p, li, span, label { color: var(--slate-700); }
+  p, li, span, label { color: var(--slate-700); font-size: var(--fs-body); }
 
   .block-container {
     padding-top: var(--s5) !important;
-    padding-bottom: var(--s6) !important;
-    max-width: 1500px;
+    padding-bottom: var(--s8) !important;
+    max-width: 1500px; padding-left: var(--s5) !important;
+    padding-right: var(--s5) !important;
   }
   section[data-testid="stSidebar"] { padding-top: var(--s4); }
 
-  /* Sidebar */
+  /* ── Sidebar ─────────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0F172A 0%, #020617 100%);
-    border-right: 1px solid #334155;
+    background: linear-gradient(180deg, #0F172A 0%, #1E1B4B 100%);
+    border-right: 1px solid #312E81;
   }
   section[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] h1,
   section[data-testid="stSidebar"] h2,
   section[data-testid="stSidebar"] h3 {
     color: #FFFFFF !important; font-weight: 700;
+    font-family: 'Sora', sans-serif !important;
   }
   section[data-testid="stSidebar"] .stSelectbox label,
   section[data-testid="stSidebar"] .stMultiSelect label {
-    color: #94A3B8 !important; font-weight: 600;
-    text-transform: uppercase; font-size: 11px; letter-spacing: 0.08em;
+    color: #A5B4FC !important; font-weight: 600;
+    text-transform: uppercase; font-size: 0.7rem;
+    letter-spacing: 0.08em;
   }
   section[data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.1) !important;
@@ -1378,12 +1505,13 @@ GLOBAL_CSS: Final[str] = """
   section[data-testid="stSidebar"] table { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] th,
   section[data-testid="stSidebar"] td {
-    color: #E2E8F0 !important; border-color: #334155 !important;
-    font-size: 13px !important; padding: var(--s2) var(--s3) !important;
+    color: #E2E8F0 !important; border-color: #312E81 !important;
+    font-size: 0.8rem !important; padding: var(--s2) var(--s3) !important;
   }
   section[data-testid="stSidebar"] .stButton > button {
     background: var(--brand) !important; color: #FFFFFF !important;
     border-radius: var(--s2); font-weight: 600; border: none;
+    transition: background 0.15s ease;
   }
   section[data-testid="stSidebar"] .stButton > button:hover {
     background: var(--brand-dark) !important;
@@ -1396,111 +1524,139 @@ GLOBAL_CSS: Final[str] = """
     border-radius: var(--s2);
     padding: var(--s3);
     margin-top: var(--s3);
-    font-size: 13px;
+    font-size: var(--fs-small);
     line-height: 1.5;
   }
   .sidebar-warning strong { color: #FCD34D !important; }
   .sidebar-warning span   { color: #E2E8F0 !important; }
 
   .sidebar-headline {
-    background: rgba(13, 148, 136, 0.18);
-    border: 1px solid rgba(94, 234, 212, 0.45);
-    border-left: 3px solid #5EEAD4;
+    background: rgba(79, 70, 229, 0.20);
+    border: 1px solid rgba(165, 180, 252, 0.45);
+    border-left: 3px solid var(--brand-light);
     border-radius: var(--s2);
     padding: var(--s3) var(--s4);
     margin-top: var(--s4);
     line-height: 1.55;
   }
   .sidebar-headline-label {
-    font-size: 10px; font-weight: 800; letter-spacing: 0.14em;
-    text-transform: uppercase; color: #5EEAD4 !important;
+    font-size: 0.65rem; font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--brand-light) !important;
     margin-bottom: var(--s2);
   }
   .sidebar-headline strong {
-    color: #FFFFFF !important; font-size: 14px; display: block;
+    color: #FFFFFF !important; font-size: var(--fs-small); display: block;
     margin-bottom: var(--s1);
   }
-  .sidebar-headline span { color: #CBD5E1 !important; font-size: 12px; }
+  .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.75rem; }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
-  /* Metric cards */
+  /* ── Metric cards ────────────────────────────────────────────────── */
   [data-testid="stMetric"] {
     background-color: #FFFFFF;
     border: 1px solid var(--slate-200);
     border-left: 5px solid var(--brand);
     border-radius: var(--s3);
-    padding: var(--s5) var(--s5);
-    box-shadow: 0 1px 3px rgba(15,23,42,0.06),
-                0 1px 2px rgba(15,23,42,0.04);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
+    padding: var(--s5);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.04),
+                0 4px 12px rgba(15,23,42,0.04);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
   }
   [data-testid="stMetric"]:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(13,148,136,0.14);
+    box-shadow: 0 4px 6px rgba(15,23,42,0.05),
+                0 12px 24px rgba(79,70,229,0.10);
   }
   [data-testid="stMetricLabel"] {
-    color: var(--slate-500) !important; font-size: 12px !important;
-    font-weight: 600 !important; text-transform: uppercase;
+    color: var(--slate-500) !important;
+    font-size: 0.72rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase;
     letter-spacing: 0.06em;
   }
   [data-testid="stMetricValue"] {
-    color: var(--ink) !important; font-weight: 800 !important;
-    font-size: 30px !important; letter-spacing: -0.02em;
+    color: var(--ink) !important;
+    font-weight: 800 !important;
+    font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.85rem) !important;
+    letter-spacing: -0.02em;
     line-height: 1.15;
+    font-family: 'Sora', 'Inter', sans-serif !important;
+    font-variant-numeric: tabular-nums;
   }
   [data-testid="stMetricDelta"] {
-    font-weight: 600 !important; font-size: 13px !important;
+    font-weight: 600 !important;
+    font-size: 0.78rem !important;
   }
 
-  /* Chart containers */
+  /* ── Chart containers ────────────────────────────────────────────── */
   [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
     border-radius: var(--s3) !important;
-    padding: var(--s4) !important;
-    box-shadow: 0 1px 3px rgba(15,23,42,0.04);
+    padding: var(--s4) var(--s5) !important;
+    box-shadow: 0 1px 2px rgba(15,23,42,0.03),
+                0 4px 14px rgba(15,23,42,0.04);
     margin-bottom: var(--s3);
   }
   [data-testid="stVerticalBlockBorderWrapper"] h3 {
     margin-top: 0 !important;
   }
 
-  /* Tabs */
+  /* ── Tabs ────────────────────────────────────────────────────────── */
   button[data-baseweb="tab"] {
-    color: var(--slate-500); font-weight: 600; font-size: 15px;
+    color: var(--slate-500); font-weight: 600; font-size: var(--fs-body);
     padding: var(--s3) var(--s5) !important;
     border-radius: var(--s2) var(--s2) 0 0;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, color 0.15s ease;
+    font-family: 'Sora', 'Inter', sans-serif !important;
   }
   button[data-baseweb="tab"]:hover {
     background: var(--slate-100);
+    color: var(--brand);
   }
   button[data-baseweb="tab"][aria-selected="true"] {
-    color: var(--brand); border-bottom-color: var(--brand);
+    color: var(--brand);
+    border-bottom-color: var(--brand);
     border-bottom-width: 3px;
   }
   [data-baseweb="tab-highlight"] { background-color: var(--brand); }
 
-  /* Buttons */
+  /* ── Buttons ─────────────────────────────────────────────────────── */
   .stButton > button {
     background: var(--brand); color: #FFFFFF;
     border: none; border-radius: var(--s2);
-    padding: var(--s2) var(--s5); font-weight: 600; font-size: 14px;
-    transition: background 0.15s ease, transform 0.1s ease;
+    padding: var(--s2) var(--s5); font-weight: 600;
+    font-size: var(--fs-body);
+    transition: background 0.15s ease, transform 0.1s ease,
+                box-shadow 0.15s ease;
   }
   .stButton > button:hover {
-    background: var(--brand-dark); transform: translateY(-1px);
+    background: var(--brand-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(79,70,229,0.25);
   }
 
+  /* ── Alerts / expander / slider ──────────────────────────────────── */
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
     border-left: 4px solid var(--warn);
-    color: #78350F; border-radius: var(--s3);
+    color: #78350F;
+    border-radius: var(--s3);
+  }
+  [data-testid="stExpander"] {
+    border: 1px solid var(--slate-200);
+    border-radius: var(--s3);
+    background: #FFFFFF;
+    margin-bottom: var(--s3);
+  }
+  [data-testid="stExpander"] summary {
+    font-weight: 600; color: var(--brand);
+    font-family: 'Sora', sans-serif !important;
   }
 
   hr { border-color: var(--slate-200); margin: var(--s5) 0; }
 
-  /* Info cards */
+  /* ── Info cards ──────────────────────────────────────────────────── */
   .info-card {
     position: relative;
     background: #FFFFFF;
@@ -1509,12 +1665,12 @@ GLOBAL_CSS: Final[str] = """
     border-radius: var(--s3);
     padding: var(--s5);
     margin-bottom: var(--s4);
-    box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+    box-shadow: 0 1px 2px rgba(15,23,42,0.03);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
   }
   .info-card:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(15,23,42,0.08);
+    box-shadow: 0 4px 16px rgba(15,23,42,0.07);
   }
   .info-card.warn { border-left-color: var(--danger); }
   .info-card.ok   { border-left-color: var(--success); }
@@ -1522,11 +1678,14 @@ GLOBAL_CSS: Final[str] = """
   .info-card.warn h4 { color: var(--danger); }
   .info-card.ok h4   { color: var(--success); }
   .info-card.info h4 { color: var(--brand); }
-  .info-card p, .info-card li { color: var(--slate-700); line-height: 1.65; }
+  .info-card p, .info-card li {
+    color: var(--slate-700); line-height: 1.65;
+    font-size: var(--fs-body);
+  }
   .info-card .tag {
     display: inline-block; background: var(--slate-100);
     color: var(--slate-600); border-radius: 999px;
-    padding: var(--s1) var(--s3); font-size: 12px;
+    padding: var(--s1) var(--s3); font-size: 0.72rem;
     font-weight: 600; margin-right: var(--s2); margin-bottom: var(--s2);
     letter-spacing: 0.02em;
   }
@@ -1539,138 +1698,196 @@ GLOBAL_CSS: Final[str] = """
   .priority-medium { background: var(--warn); }
   .priority-low    { background: var(--success); }
 
-  /* ── Unified headline callout (Overview strip + Satisfaction hero) ── */
-  .hero-banner,
-  .headline-strip {
-    display: flex;
-    align-items: center;
-    gap: var(--s3);
+  /* ── Headline / hero / strip ─────────────────────────────────────── */
+  .hero-banner, .headline-strip {
+    display: flex; align-items: center; gap: var(--s3);
     border-radius: var(--s3);
     padding: var(--s3) var(--s4);
     margin: var(--s4) 0;
   }
-
   .hero-banner {
-    background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 55%, #99F6E4 100%);
-    border: 1px solid #99F6E4;
+    background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 55%, #C7D2FE 100%);
+    border: 1px solid #A5B4FC;
     border-left: 4px solid var(--brand);
-    box-shadow: 0 2px 8px rgba(13,148,136,0.08);
+    box-shadow: 0 2px 10px rgba(79,70,229,0.10);
   }
-
   .headline-strip {
-    background: linear-gradient(90deg, #F0FDFA 0%, #FFFFFF 100%);
-    border: 1px solid #99F6E4;
+    background: linear-gradient(90deg, #EEF2FF 0%, #FFFFFF 100%);
+    border: 1px solid #C7D2FE;
     border-left: 4px solid var(--brand);
   }
-
   .hero-banner .hero-icon,
   .headline-strip-icon {
-    font-size: 20px;
-    line-height: 1;
-    flex-shrink: 0;
+    font-size: 20px; line-height: 1; flex-shrink: 0;
   }
-
   .hero-banner .hero-text { flex: 1; min-width: 0; }
   .headline-strip .headline-strip-text { flex: 1; min-width: 0; }
-
   .hero-banner .hero-label,
   .headline-strip .headline-strip-label {
-    display: block;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--brand);
-    margin-bottom: var(--s1);
+    display: block; font-size: 0.68rem; font-weight: 800;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--brand); margin-bottom: var(--s1);
   }
-
   .hero-banner .hero-headline,
   .headline-strip-text p {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--slate-700);
-    line-height: 1.55;
-    margin: 0;
-    letter-spacing: normal;
+    font-size: var(--fs-body); font-weight: 500;
+    color: var(--slate-700); line-height: 1.55;
+    margin: 0; letter-spacing: normal;
   }
-
   .hero-banner .hero-headline b,
   .headline-strip-text b {
-    color: var(--brand-dark);
-    font-weight: 700;
+    color: var(--brand-dark); font-weight: 700;
   }
 
-  /* Partial year banner */
+  /* ── Executive summary ───────────────────────────────────────────── */
+  .exec-summary {
+    display: flex; align-items: stretch; gap: var(--s4);
+    background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
+    border: 1px solid var(--slate-200);
+    border-radius: var(--s3);
+    padding: var(--s5);
+    margin: var(--s4) 0;
+    box-shadow: 0 2px 12px rgba(79,70,229,0.06);
+  }
+  .exec-summary-main { flex: 1; min-width: 0; }
+  .exec-summary-eyebrow {
+    font-size: 0.68rem; font-weight: 800;
+    letter-spacing: 0.16em; color: var(--brand);
+    margin-bottom: var(--s2);
+  }
+  .exec-summary-title {
+    font-size: var(--fs-h2); font-weight: 800;
+    color: var(--ink); line-height: 1.25;
+    margin-bottom: var(--s2);
+  }
+  .exec-summary-title b { color: var(--brand-dark); }
+  .exec-summary-detail {
+    color: var(--slate-600); font-size: var(--fs-body);
+    line-height: 1.6;
+  }
+  .exec-summary-badge {
+    display: flex; flex-direction: column; justify-content: center;
+    align-items: center; text-align: center;
+    min-width: 130px; padding: var(--s3) var(--s4);
+    border: 2px solid; border-radius: var(--s3);
+  }
+  .exec-summary-badge-label {
+    font-size: 0.65rem; font-weight: 800;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    opacity: 0.85; margin-bottom: var(--s2);
+    color: inherit;
+  }
+  .exec-summary-badge-value {
+    font-family: 'Sora', sans-serif; font-weight: 800;
+    font-size: 1rem; line-height: 1.2; color: inherit;
+  }
+
+  /* ── Partial-year banner ─────────────────────────────────────────── */
   .overview-banner {
     background: #FEF3C7;
     border-left: 4px solid var(--warn);
     border-radius: var(--s3);
     padding: var(--s3) var(--s5);
     margin-bottom: var(--s4);
-    font-size: 14px; color: #78350F; line-height: 1.55;
+    font-size: var(--fs-body); color: #78350F; line-height: 1.55;
   }
   .overview-banner b { color: #92400E; }
 
-  /* Scope pill */
+  /* ── Scope pill ──────────────────────────────────────────────────── */
   .scope-pill {
-    display: inline-block; background: var(--brand); color: #FFFFFF;
-    border-radius: 999px; padding: var(--s2) var(--s4);
-    font-size: 13px; font-weight: 600;
+    display: inline-block;
+    background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
+    color: #FFFFFF; border-radius: 999px;
+    padding: var(--s2) var(--s4);
+    font-size: var(--fs-small); font-weight: 600;
     margin-bottom: var(--s2);
-    box-shadow: 0 2px 8px rgba(13,148,136,0.25);
+    box-shadow: 0 2px 10px rgba(79,70,229,0.30);
   }
 
-  /* Insight line */
+  /* ── Insight ─────────────────────────────────────────────────────── */
   .insight {
-    display: flex; flex-direction: column; gap: var(--s1);
-    background: var(--slate-50);
+    display: flex; gap: var(--s3); align-items: flex-start;
+    background: #F5F3FF;
     border-left: 3px solid var(--brand-light);
     border-radius: var(--s2);
     padding: var(--s3) var(--s4);
-    margin-top: var(--s2);
-    font-size: 13px;
+    margin-top: var(--s3);
+    font-size: var(--fs-small);
   }
+  .insight-chip {
+    flex-shrink: 0;
+    background: var(--brand); color: #FFFFFF;
+    padding: 2px 10px; border-radius: 999px;
+    font-size: 0.7rem; font-weight: 700;
+    white-space: nowrap;
+  }
+  .insight-body { display: flex; flex-direction: column; gap: 2px; }
   .insight-scope {
-    font-size: 10px; font-weight: 700; color: var(--brand);
+    font-size: 0.68rem; font-weight: 700; color: var(--brand);
     text-transform: uppercase; letter-spacing: 0.06em;
-    opacity: 0.85;
+    opacity: 0.9;
   }
   .insight-text { color: var(--slate-600); line-height: 1.55; }
 
-  /* Empty state */
+  /* ── Statistical verdict ─────────────────────────────────────────── */
+  .verdict-card {
+    display: flex; flex-direction: column; gap: var(--s1);
+    background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
+    border: 1px solid #6EE7B7;
+    border-left: 4px solid var(--success);
+    border-radius: var(--s2);
+    padding: var(--s3) var(--s4);
+    margin: var(--s3) 0;
+  }
+  .verdict-label {
+    font-size: 0.7rem; font-weight: 800;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--success);
+  }
+  .verdict-text {
+    font-size: var(--fs-small); color: var(--slate-700);
+    line-height: 1.55;
+  }
+  .verdict-text b { color: var(--ink); }
+
+  /* ── Empty state ─────────────────────────────────────────────────── */
   .empty-state {
     text-align: center;
-    padding: var(--s7) var(--s5);
+    padding: var(--s8) var(--s5);
     background: var(--slate-50);
     border: 1px dashed var(--slate-300);
     border-radius: var(--s3);
   }
   .empty-icon { font-size: 40px; }
   .empty-title {
-    font-size: 18px; font-weight: 700; color: var(--slate-700);
-    margin: var(--s2) 0;
+    font-size: 1.15rem; font-weight: 700;
+    color: var(--slate-700); margin: var(--s2) 0;
+    font-family: 'Sora', sans-serif;
   }
-  .empty-body { color: var(--slate-500); font-size: 14px; }
+  .empty-body { color: var(--slate-500); font-size: var(--fs-body); }
+  .empty-hint {
+    margin-top: var(--s3); color: var(--brand);
+    font-size: var(--fs-small); font-weight: 500;
+  }
 
-  /* Dataframe */
+  /* ── Dataframe / caption ─────────────────────────────────────────── */
   [data-testid="stDataFrame"] {
     border-radius: var(--s3); overflow: hidden;
     border: 1px solid var(--slate-200);
   }
   .stPyplot { margin-top: var(--s1); }
-
   .stCaption, [data-testid="stCaptionContainer"] {
-    color: var(--slate-500); font-size: 13px;
+    color: var(--slate-500); font-size: var(--fs-small);
   }
 
-  /* Mobile */
+  /* ── Mobile ──────────────────────────────────────────────────────── */
   @media (max-width: 768px) {
     .block-container { padding: var(--s4) !important; }
-    h1 { font-size: 26px; }
-    h2 { font-size: 20px; }
-    [data-testid="stMetricValue"] { font-size: 24px !important; }
-    .hero-banner,
-    .headline-strip { flex-direction: column; align-items: flex-start; }
+    .hero-banner, .headline-strip {
+      flex-direction: column; align-items: flex-start;
+    }
+    .exec-summary { flex-direction: column; }
+    .exec-summary-badge { min-width: auto; }
   }
 </style>
 """
@@ -1827,7 +2044,7 @@ def render_overview(year: str, states: tuple[str, ...],
 
     render_headline_strip(year, states)
 
-    col_left, col_right = st.columns([1, 1])
+    col_left, col_right = st.columns([1, 1], gap="medium")
     with col_left:
         _chart_card(chart_review_distribution, year, states)
     with col_right:
@@ -1836,7 +2053,6 @@ def render_overview(year: str, states: tuple[str, ...],
 
 # ════════════════════════════════════════════════════════════════════════════
 # §11  TAB 2 — CUSTOMER SATISFACTION
-#       Narrative order: evidence → when → where → trend → geography
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
@@ -1847,19 +2063,19 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     st.divider()
 
-    col_a, col_b = st.columns([1, 1])
+    col_a, col_b = st.columns([1, 1], gap="medium")
     with col_a:
         _chart_card(chart_punctuality_vs_satisfaction, year, states)
     with col_b:
         _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    col_c, col_d = st.columns([1, 1])
+    col_c, col_d = st.columns([1, 1], gap="medium")
     with col_c:
         _chart_card(chart_state_scores, year, states)
     with col_d:
         _chart_card(chart_ontime_by_state, year, states)
 
-    col_e, col_f = st.columns([1, 1])
+    col_e, col_f = st.columns([1, 1], gap="medium")
     with col_e:
         _chart_card(chart_monthly_score, year, states)
     with col_f:
@@ -1950,7 +2166,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     customer_rows = len(customers)
     unique_customers = customers["customer_unique_id"].nunique()
 
-    c1, c2 = st.columns(2)
+    c1, c2 = st.columns(2, gap="medium")
     with c1:
         st.markdown("**Reviews fan-out**")
         st.dataframe(
@@ -1960,7 +2176,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
                 "duplicate_rows": duplicate_rows,
             }]),
             hide_index=True,
-            width="stretch",
+            use_container_width=True,
         )
     with c2:
         st.markdown("**Customer identity**")
@@ -1970,7 +2186,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
                 "unique_customers": unique_customers,
             }]),
             hide_index=True,
-            width="stretch",
+            use_container_width=True,
         )
 
     model = get_model()
@@ -1988,7 +2204,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
                 "worst_days_late": int(dl.max()),
             }]),
             hide_index=True,
-            width="stretch",
+            use_container_width=True,
         )
         st.caption(
             f"When late, orders run **{dl.mean():.2f} days past estimate** "
@@ -2008,6 +2224,8 @@ def render_recommendations() -> None:
         "when the sidebar filters move — a decision should not flip "
         "because someone narrowed the view."
     )
+
+    render_priority_matrix()
 
     st.divider()
     st.markdown("### Prioritised recommendations")
@@ -2086,11 +2304,19 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
+    # ── CRITICAL: set_page_config MUST be the first Streamlit call ──────
     st.set_page_config(
         page_title="Customer Satisfaction · Olist",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded",
+        menu_items={
+            "About": (
+                "**Customer Satisfaction Dashboard**  \n"
+                "PORA Academy Cohort 7 — Group 1 Capstone  \n"
+                "Built with Streamlit · Matplotlib · pandas"
+            ),
+        },
     )
     _apply_global_style()
 
@@ -2101,20 +2327,25 @@ def main() -> None:
         load_data()
     except (FileNotFoundError, ValueError) as exc:
         _LOGGER.exception("Data load failed")
-        st.error(f"❌ **Data load failed.** {exc}")
+        st.error(
+            f"❌ **Data load failed.** {exc}\n\n"
+            "On Streamlit Cloud, ensure `OLIST_DATA_DIR` points to "
+            "the folder with the CSVs (or place them in `./data`)."
+        )
         st.stop()
 
     year, states = render_sidebar()
     filter_active = year != "All" or bool(states)
 
+    # ── Header ──────────────────────────────────────────────────────────
     st.markdown(
         """
-        <h1 style="color:#0F172A; font-size:34px; font-weight:800;
+        <h1 style="color:#0F172A; font-size:2rem; font-weight:800;
                    letter-spacing:-0.03em; margin-bottom:4px; padding-bottom:0;">
           Customer Satisfaction Dashboard
         </h1>
-        <p style='color:#64748B; font-size:15px; margin-top:0;'>
-          PORA Academy Cohort 7 — Group 1 Capstone Project
+        <p style='color:#64748B; font-size:0.95rem; margin-top:0;'>
+          PORA Academy Cohort 7 — Group 1 Capstone · Decision-first view
         </p>
         """,
         unsafe_allow_html=True,
@@ -2123,6 +2354,9 @@ def main() -> None:
         f'<span class="scope-pill">Scope: {scope_label(year, states)}</span>',
         unsafe_allow_html=True,
     )
+
+    # ── Executive summary ──────────────────────────────────────────────
+    render_executive_summary(year, states)
 
     st.write("")
 
