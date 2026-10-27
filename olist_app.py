@@ -136,7 +136,6 @@ class Config:
     data_cache_ttl_seconds:    Final[int] = 3600
     geojson_cache_ttl_seconds: Final[int] = 86400
     min_reviews_per_month:     Final[int] = 30
-    q12_min_orders:            Final[int] = 2000
 
 
 CONFIG  = Config()
@@ -1114,7 +1113,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.y  GEOGRAPHY  (Q4, Q5, Q12)
+# §6.y  GEOGRAPHY  (Q4, Q5)
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
@@ -1178,16 +1177,6 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
                 color=PALETTE.slate_700, fontweight="bold")
     _finish(fig)
 
-    q12 = (df.groupby("customer_state")
-             .agg(
-                 orders=("order_id", "nunique"),
-                 avg_score=("review_score", "mean"),
-             )
-             .reset_index()
-             .query(f"orders >= {CONFIG.q12_min_orders}")
-             .sort_values("avg_score", ascending=True)
-             .head(3))
-
     if len(plot_df) == 1:
         text = (f"<b>{plot_df.iloc[0]['customer_state']}</b> averages "
                 f"{plot_df.iloc[0]['avg_score']:.2f}★ "
@@ -1200,14 +1189,6 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
                       else 0.0)
         weak = plot_df.loc[plot_df["avg_score"] < 4.10]
         weak_share = float(weak["share"].sum())
-        q12_txt = ""
-        if not q12.empty:
-            q12_lines = [
-                f"{r['customer_state']} {r['avg_score']:.2f}★ "
-                f"(n={int(r['orders']):,})"
-                for _, r in q12.iterrows()
-            ]
-            q12_txt = " Q12 lowest (≥2k orders): " + " · ".join(q12_lines) + "."
         text = (f"<b>{low['customer_state']}</b> "
                 f"({low['avg_score']:.2f}★, {low['share']:.1f}% of orders) "
                 f"anchors the low end and <b>{high['customer_state']}</b> "
@@ -1215,107 +1196,8 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
                 f"end — a {spread:.2f}★ spread (<b>{spread_pct:.1f}%</b>) "
                 f"dwarfed by the on-time↔late gap. "
                 f"<b>{weak_share:.1f}%</b> of orders sit in states scoring "
-                f"&lt; 4.10★.{q12_txt}")
+                f"&lt; 4.10★.")
     _insight(year, states, text)
-
-
-def chart_lowest_scoring_states(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("### Lowest-Scoring States *(min 2,000 orders)*")
-    st.caption(
-        "Q12 · filterable · HAVING orders ≥ 2,000 · ranked ascending by "
-        "row-level AVG(review_score)."
-    )
-
-    df = _reviews_with_order_scope(year, states)
-    if df is not None and not df.empty:
-        df = df[df["review_score"].notna() & df["customer_state"].notna()]
-    if df is None or df.empty:
-        _no_data(); return
-
-    grp = (df.groupby("customer_state")
-             .agg(
-                 orders=("order_id", "nunique"),
-                 reviews=("review_score", "count"),
-                 avg_score=("review_score", "mean"),
-             )
-             .reset_index()
-             .query(f"orders >= {CONFIG.q12_min_orders}")
-             .sort_values("avg_score", ascending=True)
-             .head(10))
-
-    if grp.empty:
-        _no_data(
-            f"No state in the current selection has ≥ "
-            f"{CONFIG.q12_min_orders:,} orders. Widen the filters."
-        ); return
-
-    total_orders = float(grp["orders"].sum())
-    if total_orders <= 0:
-        _no_data(); return
-    grp["share"] = 100.0 * grp["orders"] / total_orders
-
-    colors = [
-        PALETTE.danger if s < 3.90
-        else PALETTE.warn if s < 4.10
-        else PALETTE.success
-        for s in grp["avg_score"]
-    ]
-
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
-    bars = ax.barh(
-        grp["customer_state"], grp["avg_score"],
-        color=colors, edgecolor=PALETTE.white, linewidth=1.4,
-    )
-    ax.set_title(
-        "Lowest-Scoring States (min 2,000 orders) · row-level AVG",
-        pad=14, loc="left",
-    )
-    ax.set_xlabel("Average review score (1–5)")
-    ax.set_xlim(0, 5.0)
-    ax.invert_yaxis()
-    _style_axes(ax)
-    ax.grid(axis="x", color=PALETTE.slate_200, linewidth=0.7)
-    ax.grid(axis="y", visible=False)
-    ax.axvline(4.00, color=PALETTE.slate_300, linestyle=":", linewidth=1.0)
-    ax.axvline(4.10, color=PALETTE.slate_300, linestyle=":", linewidth=1.0)
-    for b, s, n, share in zip(bars, grp["avg_score"], grp["orders"],
-                              grp["share"]):
-        ax.text(s + 0.04, b.get_y() + b.get_height() / 2,
-                f"{s:.2f}  (n={int(n):,}, {share:.1f}%)",
-                va="center", fontsize=9,
-                color=PALETTE.slate_700, fontweight="bold")
-    _finish(fig)
-
-    worst  = grp.iloc[0]
-    second = grp.iloc[1] if len(grp) > 1 else None
-    best_in_grp = grp.iloc[-1]
-    below_4 = grp.loc[grp["avg_score"] < 4.00]
-    below_4_share = float(below_4["share"].sum())
-
-    worst_txt = (f"<b>{worst['customer_state']}</b> bottoms out at "
-                 f"<b>{worst['avg_score']:.2f}★</b> across "
-                 f"{int(worst['orders']):,} orders "
-                 f"({worst['share']:.1f}% of this cohort)")
-    second_txt = ""
-    if second is not None:
-        gap_12 = worst["avg_score"] - second["avg_score"]
-        second_txt = (f"; <b>{second['customer_state']}</b> follows at "
-                      f"<b>{second['avg_score']:.2f}★</b> "
-                      f"(a {abs(gap_12):.2f}★ gap)")
-    tail_txt = (
-        f" Only <b>{below_4_share:.1f}%</b> of orders in this cohort sit "
-        f"below 4.00★."
-        if below_4_share > 0 else
-        " No state in this cohort is below 4.00★."
-    )
-    _insight(
-        year, states,
-        f"{worst_txt}{second_txt}. Cohort spans "
-        f"<b>{worst['avg_score']:.2f}★</b> → "
-        f"<b>{best_in_grp['avg_score']:.2f}★</b> "
-        f"(<b>{best_in_grp['customer_state']}</b>).{tail_txt}"
-    )
-    _partial_note(year)
 
 
 def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
@@ -1905,7 +1787,7 @@ def render_priority_matrix() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §8  GLOBAL CSS — modern indigo/coral, best-practice typography & spacing
+# §8  GLOBAL CSS
 # ════════════════════════════════════════════════════════════════════════════
 
 GLOBAL_CSS: Final[str] = """
@@ -1974,7 +1856,6 @@ GLOBAL_CSS: Final[str] = """
   }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
-  /* ── App hero ──────────────────────────────────────────────────── */
   .app-hero {
     display: flex;
     align-items: center;
@@ -2022,7 +1903,6 @@ GLOBAL_CSS: Final[str] = """
     display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
   }
 
-  /* ── Typography scale ─────────────────────────────────────────── */
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
        line-height: 1.2; margin-bottom: var(--s3); }
   h2 { color: var(--ink); font-weight: 700; font-size: var(--fs-h2);
@@ -2040,7 +1920,6 @@ GLOBAL_CSS: Final[str] = """
     line-height: 1.55;
   }
 
-  /* ── Layout container ─────────────────────────────────────────── */
   .block-container {
     padding-top: var(--s5) !important;
     padding-bottom: var(--s8) !important;
@@ -2049,7 +1928,6 @@ GLOBAL_CSS: Final[str] = """
     padding-right: var(--s5) !important;
   }
 
-  /* ── Sidebar ──────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0F172A 0%, #1E1B4B 100%);
     border-right: 1px solid #312E81;
@@ -2125,7 +2003,6 @@ GLOBAL_CSS: Final[str] = """
     color: #FFFFFF !important; font-weight: 700 !important;
   }
 
-  /* Sidebar warning / headline */
   .sidebar-warning {
     background: rgba(245,158,11,0.14);
     border: 1px solid rgba(245,158,11,0.42);
@@ -2160,7 +2037,6 @@ GLOBAL_CSS: Final[str] = """
   .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.74rem; }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
-  /* ── Metric cards ─────────────────────────────────────────────── */
   [data-testid="stMetric"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200);
@@ -2199,7 +2075,6 @@ GLOBAL_CSS: Final[str] = """
     margin-top: 4px;
   }
 
-  /* ── Chart containers ─────────────────────────────────────────── */
   [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
@@ -2217,7 +2092,6 @@ GLOBAL_CSS: Final[str] = """
     margin-bottom: var(--s3) !important;
   }
 
-  /* ── Buttons ──────────────────────────────────────────────────── */
   .stButton > button {
     background: var(--brand); color: #FFFFFF;
     border: none; border-radius: var(--radius-md);
@@ -2232,7 +2106,6 @@ GLOBAL_CSS: Final[str] = """
     box-shadow: var(--shadow-brand);
   }
 
-  /* ── Alerts / expander / slider / dropdown ───────────────────── */
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
     border-left: 4px solid var(--warn);
@@ -2257,7 +2130,6 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small) !important;
   }
 
-  /* ── Info cards ───────────────────────────────────────────────── */
   .info-card {
     position: relative; background: #FFFFFF;
     border: 1px solid var(--slate-200);
@@ -2298,7 +2170,6 @@ GLOBAL_CSS: Final[str] = """
   .priority-medium { background: var(--warn); }
   .priority-low    { background: var(--success); }
 
-  /* ── Headline / hero banners ──────────────────────────────────── */
   .hero-banner, .headline-strip {
     display: flex; align-items: center; gap: var(--s3);
     border-radius: var(--radius-lg);
@@ -2338,7 +2209,6 @@ GLOBAL_CSS: Final[str] = """
     color: var(--brand-dark); font-weight: 700;
   }
 
-  /* ── Executive summary ───────────────────────────────────────── */
   .exec-summary {
     display: flex; align-items: stretch; gap: var(--s5);
     background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
@@ -2381,7 +2251,6 @@ GLOBAL_CSS: Final[str] = """
     font-size: 1.05rem; line-height: 1.2; color: inherit;
   }
 
-  /* ── Overview banner ─────────────────────────────────────────── */
   .overview-banner {
     background: #FEF3C7; border-left: 4px solid var(--warn);
     border-radius: var(--radius-lg); padding: var(--s4) var(--s5);
@@ -2390,7 +2259,6 @@ GLOBAL_CSS: Final[str] = """
   }
   .overview-banner b { color: #92400E; }
 
-  /* ── Pills ───────────────────────────────────────────────────── */
   .scope-pill {
     display: inline-block;
     background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
@@ -2405,7 +2273,6 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small); font-weight: 600;
   }
 
-  /* ── Insight card ─────────────────────────────────────────────── */
   .insight {
     display: flex; gap: var(--s3); align-items: flex-start;
     background: #F5F3FF; border-left: 3px solid var(--brand-light);
@@ -2428,7 +2295,6 @@ GLOBAL_CSS: Final[str] = """
   .insight-text { color: var(--slate-600); line-height: 1.6; }
   .insight-text b { color: var(--ink); font-weight: 700; }
 
-  /* ── Verdict card ─────────────────────────────────────────────── */
   .verdict-card {
     display: flex; flex-direction: column; gap: 4px;
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
@@ -2447,7 +2313,6 @@ GLOBAL_CSS: Final[str] = """
   }
   .verdict-text b { color: var(--ink); }
 
-  /* ── Empty state ─────────────────────────────────────────────── */
   .empty-state {
     text-align: center; padding: var(--s7) var(--s5);
     background: var(--slate-50);
@@ -2465,7 +2330,6 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small); font-weight: 500;
   }
 
-  /* ── Dataframe ───────────────────────────────────────────────── */
   [data-testid="stDataFrame"] {
     border-radius: var(--radius-md); overflow: hidden;
     border: 1px solid var(--slate-200);
@@ -2474,7 +2338,6 @@ GLOBAL_CSS: Final[str] = """
 
   hr { border-color: var(--slate-200); margin: var(--s5) 0; }
 
-  /* ── Responsive ──────────────────────────────────────────────── */
   @media (max-width: 1100px) {
     .app-hero { flex-direction: column; align-items: flex-start;
                 padding: var(--s5); gap: var(--s4); }
@@ -2723,9 +2586,8 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
     _chart_card(chart_punctuality_vs_satisfaction, year, states)
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    # Geographic view — Q4 → Q12 → Q5 (stacked)
+    # Geographic view — Q4 then Q5 (stacked)
     _chart_card(chart_state_scores, year, states)             # Q4
-    _chart_card(chart_lowest_scoring_states, year, states)    # Q12
     _chart_card(chart_ontime_by_state, year, states)          # Q5
 
     _chart_card(chart_monthly_score, year, states)
@@ -2831,12 +2693,6 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         <b>Q7</b> = <code>7,826 · 9.55 · 189</code>.
         <b>Q10</b> = <code>99,224 / 98,673 / 551</code>.
         <b>Q11</b> = <code>99,441 / 96,096</code>.
-        <b>Q12</b> = BA <code>3.86</code> (3,340) · RJ <code>3.87</code>
-        (12,687) · ES <code>4.04</code> (2,006) · GO <code>4.04</code>
-        (2,007) · DF <code>4.06</code> (2,128) · SC <code>4.07</code>
-        (3,609) · RS <code>4.13</code> (5,443) · MG <code>4.14</code>
-        (11,554) · SP <code>4.17</code> (41,472) · PR <code>4.18</code>
-        (5,019).
         All verified in the current code; see the <i>Whole-dataset
         diagnostics</i> table below.</p>""",
         variant="ok", tags=["Reconciliation", "KPI contract"],
@@ -2983,8 +2839,8 @@ def render_recommendations() -> None:
     )
     info_card(
         "🟡 R4 — Pilot improvement in Bahia (BA)",
-        """<p><b>Evidence (Q12).</b> BA scores 3.86 — the lowest of any
-        state with 2,000+ orders — across ~3,340 orders, <b>3.4%</b> of
+        """<p><b>Evidence.</b> BA scores 3.86 — the lowest of any state
+        with 2,000+ orders — across ~3,340 orders, <b>3.4%</b> of
         national volume.</p>
         <p><b>Action.</b> Apply the RJ diagnostic checklist to BA; test
         changes at limited scale.</p>
