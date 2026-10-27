@@ -1,59 +1,21 @@
 # olist_app.py
 """
-Phase 2c Capstone — Group 1: Customer Satisfaction
-PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone
-
-Professional, decision-first dashboard.
-  · Modern indigo/coral palette · Sora + Inter + JetBrains Mono
-  · Navigation tabs in the sidebar · cached pandas layer
-  · Advanced punctuality module (severity tiers, CI, what-if)
-  · Streamlit Cloud ready · version-safe API shims
-  · Local PORA Academy logo integration
-
-Deploy:   streamlit run olist_app.py
-Cloud:    Streamlit Community Cloud — set OLIST_DATA_DIR if needed.
-Requires: streamlit, pandas, matplotlib, requests
-Optional: scipy (statistical CI), plotly (interactive matrix)
-
 ════════════════════════════════════════════════════════════════════════════
-RECONCILIATION CONTRACT  (audited against Q1–Q12 verified SQL)
+OLIST CUSTOMER SATISFACTION DASHBOARD
+PORA Academy · Cohort 7 · Group 1 Capstone
+
+A decision-first dashboard built on 99,441 Olist orders (2016–2018).
+Primary finding: delivery punctuality is the #1 satisfaction lever —
+late orders cost ~1.73★ (40% of the on-time score).
+
+DEPLOY
+  Local:    streamlit run olist_app.py
+  Cloud:    Streamlit Community Cloud → set OLIST_DATA_DIR if CSVs
+            are not in ./data
+REQUIREMENTS
+  streamlit>=1.30 · pandas>=2.0 · matplotlib>=3.7 · requests
+  Optional: scipy (CI), plotly (interactive matrix)
 ════════════════════════════════════════════════════════════════════════════
-Q1  Headline KPIs
-    99,441 · 96,478 · 4.09 · 7,826 · 12.56
-    → query_kpis(): raw review rows for avg_score; fractional delivery_days;
-      SQL-exact is_late.  ✓
-
-Q2  Review score distribution (row-level, 99,224 rows)
-    → _reviews_in_scope()  ✓
-
-Q3  Monthly avg score = AVG(review_score) over ROW-LEVEL reviews
-    per purchase-month.  ✓ (chart_monthly_score now uses row-level)
-
-Q4  Avg score by state = AVG(review_score) over ROW-LEVEL reviews
-    joined to order's customer.  ✓
-
-Q5  On-time vs late by state — requires delivered_customer_date NOT NULL
-    AND status='delivered'.  Delivered counts are 95,832 total, not 96,478.
-    Late = 7,661 here vs Q1's 7,826 because of the NOT NULL guard. ✓
-
-Q6  Punctuality vs satisfaction — row-level reviews, delivered + date NOT NULL.
-    On Time = 88,171 @ 4.29 · Late = 7,661 @ 2.57.  ✓
-
-Q7  Days late diagnostic: 7,826 · 9.55 · 189.  ✓
-
-Q8  Review volume by year: 326 / 45,044 / 53,854.  ✓
-
-Q9  Satisfaction by bucket — row-level reviews, delivered + date NOT NULL.
-    0-5d=4.45 (13,374) … 30+d=2.26 (4,438).  ✓
-
-Q10 Fan-out: 99,224 · 98,673 · 551.  ✓
-Q11 Identity: 99,441 · 96,096.  ✓
-Q12 Lowest-scoring states (≥2,000 orders): BA 3.86, RJ 3.88 …  ✓
-
-Two modelling rules encoded:
-  R1. Row-level reviews drive every AVG(review_score) KPI (Q2–Q4, Q6, Q9).
-  R2. Order-grain means are used ONLY where the claim is "per order"
-      (severity tiers, what-if), and are clearly labelled as such.
 """
 
 from __future__ import annotations
@@ -61,9 +23,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import math
 import os
 from dataclasses import dataclass, field
-from typing import Any, Final, Sequence
+from typing import Any, Callable, Final, Sequence
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -76,15 +39,15 @@ from matplotlib.ticker import FuncFormatter
 # §1  CONFIGURATION
 # ════════════════════════════════════════════════════════════════════════════
 
-CHART_FIGSIZE: Final[tuple[float, float]] = (8.6, 4.8)
+CHART_FIGSIZE:      Final[tuple[float, float]] = (8.6, 4.8)
 CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
-PARTIAL_YEARS: Final[frozenset[str]] = frozenset({"2016", "2018"})
+PARTIAL_YEARS:      Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
 
-REF = {
+REF: Final[dict[str, Any]] = {
     "total_orders":      99_441,
     "delivered_orders":  96_478,
     "avg_review_score":   4.09,
@@ -93,10 +56,8 @@ REF = {
     "on_time_score":      4.29,
     "late_score":         2.57,
     "star_gap":           1.73,
-    # Q6-specific (delivered + date NOT NULL + has review)
     "q6_on_time_orders": 88_171,
     "q6_late_orders":     7_661,
-    # Q5-specific (delivered + date NOT NULL)
     "q5_delivered":      95_832,
     "q5_late":            7_661,
 }
@@ -104,21 +65,26 @@ REF = {
 
 @dataclass(frozen=True)
 class Palette:
-    primary:       str = "#4F46E5"
+    # Brand
+    primary:       str = "#6366F1"   # Indigo 500
     primary_light: str = "#A5B4FC"
-    primary_dark:  str = "#3730A3"
-    accent:        str = "#F97316"
+    primary_dark:  str = "#4338CA"
+    accent:        str = "#F97316"   # Orange 500
     accent_light:  str = "#FDBA74"
     accent_dark:   str = "#C2410C"
 
+    # Semantic
     success:       str = "#10B981"
     success_light: str = "#6EE7B7"
+    success_dark:  str = "#047857"
     warn:          str = "#F59E0B"
     warn_light:    str = "#FCD34D"
-    warn_text:     str = "#B45309"
-    danger:        str = "#E11D48"
-    danger_light:  str = "#FDA4AF"
+    warn_dark:     str = "#B45309"
+    danger:        str = "#EF4444"
+    danger_light:  str = "#FCA5A5"
+    danger_dark:   str = "#B91C1C"
 
+    # Neutrals
     ink:           str = "#0F172A"
     ink_soft:      str = "#1E293B"
     slate_700:     str = "#334155"
@@ -144,15 +110,14 @@ class Config:
         default_factory=lambda: {
             "orders": (
                 "order_id", "customer_id", "order_status",
-                "order_purchase_timestamp", "order_approved_at",
-                "order_delivered_carrier_date",
+                "order_purchase_timestamp",
                 "order_delivered_customer_date",
                 "order_estimated_delivery_date",
             ),
             "customers": ("customer_id", "customer_unique_id",
                           "customer_state"),
             "order_items": ("order_id", "price", "freight_value"),
-            "reviews":   ("review_id", "order_id", "review_score"),
+            "reviews":   ("order_id", "review_score"),
         }
     )
     all_states: Final[tuple[str, ...]] = (
@@ -171,6 +136,7 @@ class Config:
     data_cache_ttl_seconds:    Final[int] = 3600
     geojson_cache_ttl_seconds: Final[int] = 86400
     min_reviews_per_month:     Final[int] = 30
+    q12_min_orders:            Final[int] = 2000
 
 
 CONFIG  = Config()
@@ -194,34 +160,109 @@ if not _LOGGER.handlers:
     )
     _LOGGER.propagate = False
 
+
 # ════════════════════════════════════════════════════════════════════════════
-# §2.x  STREAMLIT API SHIMS
+# §2.x  NUMERIC + FORMAT GUARDS
+# ════════════════════════════════════════════════════════════════════════════
+
+def _safe_num(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(f):
+        return None
+    return f
+
+
+def _safe_div(num: Any, den: Any) -> float | None:
+    n = _safe_num(num)
+    d = _safe_num(den)
+    if n is None or d is None or d == 0:
+        return None
+    out = n / d
+    return out if math.isfinite(out) else None
+
+
+def _safe_mean(series: pd.Series | None) -> float | None:
+    if series is None or len(series) == 0:
+        return None
+    s = series.dropna()
+    if s.empty:
+        return None
+    return _safe_num(s.mean())
+
+
+def _safe_sum(series: pd.Series | None) -> float:
+    if series is None or len(series) == 0:
+        return 0.0
+    return float(series.fillna(0).sum())
+
+
+def fmt_int(v: Any) -> str:
+    n = _safe_num(v)
+    return "—" if n is None else f"{int(n):,}"
+
+
+def fmt_float(v: Any, p: int = 2) -> str:
+    n = _safe_num(v)
+    return "—" if n is None else f"{n:.{p}f}"
+
+
+def fmt_pct(v: Any, p: int = 1) -> str:
+    n = _safe_num(v)
+    return "—" if n is None else f"{n:.{p}f}%"
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# §2.y  STREAMLIT API SHIMS (version drift)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _st_pyplot(fig: plt.Figure) -> None:
     try:
         st.pyplot(fig, width="stretch")
     except TypeError:
-        st.pyplot(fig, use_container_width=True)
+        try:
+            st.pyplot(fig, use_container_width=True)
+        except Exception:
+            st.pyplot(fig)
 
 
 def _st_dataframe(df: pd.DataFrame, *, hide_index: bool = True) -> None:
     try:
         st.dataframe(df, hide_index=hide_index, width="stretch")
     except TypeError:
-        st.dataframe(df, hide_index=hide_index, use_container_width=True)
+        try:
+            st.dataframe(df, hide_index=hide_index, use_container_width=True)
+        except Exception:
+            st.dataframe(df)
 
 
-def _st_plotly(fig) -> None:
+def _st_plotly(fig: Any) -> None:
     try:
         st.plotly_chart(fig, width="stretch")
     except TypeError:
-        st.plotly_chart(fig, use_container_width=True)
+        try:
+            st.plotly_chart(fig, use_container_width=True)
+        except Exception:
+            st.plotly_chart(fig)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §2.y  LOGO HELPER
+# §2.z  LOGO HELPER
 # ════════════════════════════════════════════════════════════════════════════
+
+_FALLBACK_LOGO_SVG: Final[str] = (
+    "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcv"
+    "MjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tl"
+    "PSIjNjM2NkYxIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3Vu"
+    "ZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIx"
+    "MiIgcj0iMTAiPjwvY2lyY2xlPjxwYXRoIGQ9Ik0xMiA4djgiPjwvcGF0aD48cGF0"
+    "aCBkPSJNOCAxMmg4Ij48L3BhdGg+PC9zdmc+"
+)
+
 
 def _get_logo_base64() -> str:
     local_path = os.path.join(
@@ -231,12 +272,11 @@ def _get_logo_base64() -> str:
         try:
             with open(local_path, "rb") as f:
                 data = f.read()
-                encoded = base64.b64encode(data).decode()
-                return f"data:image/png;base64,{encoded}"
-        except Exception as e:
-            _LOGGER.error(f"Failed to load local logo: {e}")
-
-    return "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNEY0NkU1IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiPjwvY2lyY2xlPjxwYXRoIGQ9Ik0xMiA4djgiPjwvcGF0aD48cGF0aCBkPSJNOCAxMmg4Ij48L3BhdGg+PC9zdmc+"
+            if data:
+                return f"data:image/png;base64,{base64.b64encode(data).decode()}"
+        except Exception as exc:
+            _LOGGER.warning("Logo load failed: %s", exc)
+    return _FALLBACK_LOGO_SVG
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -263,7 +303,10 @@ def load_data() -> dict[str, pd.DataFrame]:
                 f"Missing CSV for table {table!r} at {path}. "
                 "Set OLIST_DATA_DIR to the folder containing the CSVs."
             )
-        frames[table] = pd.read_csv(path)
+        try:
+            frames[table] = pd.read_csv(path)
+        except Exception as exc:
+            raise ValueError(f"Could not read {filename}: {exc}") from exc
 
     for table, required in CONFIG.required_columns.items():
         if table not in frames:
@@ -287,19 +330,6 @@ def load_data() -> dict[str, pd.DataFrame]:
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Preparing analysis model…")
 def build_model(frames_fingerprint: str) -> pd.DataFrame:
-    """
-    Order-grain model.  Deliberately keeps ORDER-LEVEL semantics so that
-    Q1 (headline), Q5 (state late), Q6 (status split), Q7 (days-late)
-    and Q9 (buckets) can be reproduced exactly by joining back to
-    row-level reviews inside query_kpis / chart functions.
-
-    Rules encoded here:
-      · delivery_days is FRACTIONAL (seconds/86400) — matches julianday.
-      · is_late = status='delivered' AND delivered > estimated.
-      · review_score_order is the per-order MEAN — used only for the
-        punctuality severity tiers and the what-if (which are order-
-        grain claims), and never for a headline AVG(review_score).
-    """
     frames = load_data()
     orders    = frames["orders"].copy()
     customers = frames["customers"][["customer_id", "customer_state"]].copy()
@@ -310,8 +340,9 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
     )
 
     reviews_order = (
-        reviews.groupby("order_id", as_index=False)["review_score"].mean()
-        .rename(columns={"review_score": "review_score_order"})
+        reviews.dropna(subset=["review_score"])
+               .groupby("order_id", as_index=False)["review_score"].mean()
+               .rename(columns={"review_score": "review_score_order"})
     )
 
     df = orders.merge(customers, on="customer_id", how="left")
@@ -322,20 +353,16 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
         "order_delivered_customer_date",
         "order_estimated_delivery_date",
     ):
-        df[col] = pd.to_datetime(df[col], errors="coerce")
+        if col in df.columns:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
 
-    df["year"] = (
-        df["order_purchase_timestamp"].dt.year.astype("Int64").astype(str)
-    )
-    df["month"] = (
-        df["order_purchase_timestamp"].dt.to_period("M").astype(str)
-    )
+    df["year"]  = df["order_purchase_timestamp"].dt.year.astype("Int64").astype(str)
+    df["month"] = df["order_purchase_timestamp"].dt.to_period("M").astype(str)
 
-    delivered_mask = (
+    df["is_delivered"] = (
         df["order_status"].eq("delivered")
         & df["order_delivered_customer_date"].notna()
     )
-    df["is_delivered"] = delivered_mask
 
     df["delivery_days"] = (
         df["order_delivered_customer_date"] - df["order_purchase_timestamp"]
@@ -358,160 +385,162 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 def get_model() -> pd.DataFrame:
     frames = load_data()
     fingerprint = hashlib.md5(
-        "|".join(f"{k}:{len(v)}" for k, v in sorted(frames.items()))
-        .encode()
+        "|".join(f"{k}:{len(v)}" for k, v in sorted(frames.items())).encode()
     ).hexdigest()
     return build_model(fingerprint)
 
 
 def apply_filters(df: pd.DataFrame, year: str,
                   states: Sequence[str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
     out = df
-    if year != "All":
+    if year and year != "All" and "year" in out.columns:
         out = out[out["year"] == year]
-    if states:
-        out = out[out["customer_state"].isin(states)]
+    if states and "customer_state" in out.columns:
+        out = out[out["customer_state"].isin(list(states))]
     return out
 
 
 def scope_label(year: str, states: Sequence[str]) -> str:
-    y = "All years" if year == "All" else year
+    y = "All years" if (not year or year == "All") else year
     s = ", ".join(states) if states else "All states"
     return f"{y} · {s}"
 
 
-def is_partial_year(year: str) -> bool:
-    return year in PARTIAL_YEARS
+def is_partial_year(year: str | None) -> bool:
+    return bool(year) and year in PARTIAL_YEARS
 
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def _reviews_with_order_scope(
     year: str, states_tuple: tuple[str, ...], *, delivered_only: bool = False
 ) -> pd.DataFrame:
-    """
-    Row-level reviews joined to the order scope (year, state).
-    This is the source of truth for every AVG(review_score) in the SQL.
-    If delivered_only=True, also applies the Q6/Q9 guard:
-        order_status='delivered' AND order_delivered_customer_date NOT NULL
-    """
     frames = load_data()
     model = apply_filters(get_model(), year, list(states_tuple))
+    if model is None or model.empty:
+        return pd.DataFrame(
+            columns=["order_id", "review_score", "year", "month",
+                     "customer_state"]
+        )
     if delivered_only:
         model = model[model["is_delivered"]]
+        if model.empty:
+            return pd.DataFrame(
+                columns=["order_id", "review_score", "year", "month",
+                         "customer_state"]
+            )
 
     reviews = frames["reviews"][["order_id", "review_score"]].copy()
     reviews["review_score"] = pd.to_numeric(
         reviews["review_score"], errors="coerce"
     )
-
     scope = model[["order_id", "year", "month", "customer_state"]].copy()
-    merged = reviews.merge(scope, on="order_id", how="inner")
-    return merged
+    return reviews.merge(scope, on="order_id", how="inner")
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §4  KPI COMPUTATION  (Q1, Q5, Q6)
+# §4  KPI COMPUTATION  (Q1, Q6)
 # ════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
-    """
-    Q1 — Headline KPIs.  Reconciles to:
-        99,441 · 96,478 · 4.09 · 7,826 · 12.56  (All)
-    """
+    empty: dict[str, Any] = {
+        "total_orders": 0, "delivered_orders": 0, "delivered_pct": None,
+        "avg_review_score": None, "late_deliveries": 0, "late_pct": None,
+        "avg_delivery_days": None, "review_rows": 0,
+        "delivered_with_date_orders": 0,
+    }
+
     df = apply_filters(get_model(), year, list(states_tuple))
-    delivered = df[df["is_delivered"]]
+    if df is None or df.empty:
+        return empty
+
+    delivered_status = df[df["order_status"].eq("delivered")]
+    delivered_with_date = delivered_status[
+        delivered_status["order_delivered_customer_date"].notna()
+    ]
 
     reviews = _reviews_with_order_scope(year, states_tuple, delivered_only=False)
-    avg_review = (
-        reviews["review_score"].mean()
-        if reviews["review_score"].notna().any() else None
-    )
-
+    avg_review = _safe_mean(reviews["review_score"]) if not reviews.empty else None
     avg_days = (
-        delivered["delivery_days"].mean()
-        if delivered["delivery_days"].notna().any() else None
+        _safe_mean(delivered_with_date["delivery_days"])
+        if not delivered_with_date.empty else None
     )
 
-    total_orders = int(df["order_id"].nunique())
-    delivered_orders = int(delivered["order_id"].nunique())
-    late_deliveries = int(delivered["is_late"].sum())
+    total_orders     = int(df["order_id"].nunique())
+    delivered_orders = int(delivered_status["order_id"].nunique())
+    late_deliveries  = (
+        int(delivered_with_date["is_late"].sum())
+        if not delivered_with_date.empty else 0
+    )
 
-    delivered_pct = (
-        100.0 * delivered_orders / total_orders
-        if total_orders else None
-    )
-    late_pct = (
-        100.0 * late_deliveries / delivered_orders
-        if delivered_orders else None
-    )
+    delivered_pct = _safe_div(delivered_orders, total_orders)
+    late_pct      = _safe_div(late_deliveries, delivered_orders)
 
     return {
         "total_orders":      total_orders,
         "delivered_orders":  delivered_orders,
-        "delivered_pct":     delivered_pct,
+        "delivered_pct":     (delivered_pct * 100.0)
+                             if delivered_pct is not None else None,
         "avg_review_score":  float(avg_review) if avg_review is not None else None,
         "late_deliveries":   late_deliveries,
-        "late_pct":          late_pct,
+        "late_pct":          (late_pct * 100.0)
+                             if late_pct is not None else None,
         "avg_delivery_days": float(avg_days) if avg_days is not None else None,
         "review_rows":       int(len(reviews)),
+        "delivered_with_date_orders":
+            int(delivered_with_date["order_id"].nunique())
+            if not delivered_with_date.empty else 0,
     }
 
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def query_headline_gap(year: str,
                        states_tuple: tuple[str, ...]) -> dict[str, Any]:
-    """
-    Q6 — On-time vs late using ROW-LEVEL reviews (inner join, delivered
-    and non-null delivered_date).  Reconciles to:
-        On Time 88,171 @ 4.29 · Late 7,661 @ 2.57  (All)
-    """
+    empty: dict[str, Any] = {
+        "on_time": None, "late": None, "gap": None,
+        "gap_pct": None, "n_on": 0, "n_late": 0,
+    }
+
     reviews = _reviews_with_order_scope(year, states_tuple, delivered_only=True)
-    if reviews.empty:
-        return {"on_time": None, "late": None, "gap": None,
-                "gap_pct": None, "n_on": 0, "n_late": 0}
+    if reviews is None or reviews.empty:
+        return empty
 
     model = apply_filters(get_model(), year, list(states_tuple))
+    if model is None or model.empty:
+        return empty
     model = model[model["is_delivered"]][["order_id", "is_late"]]
+    if model.empty:
+        return empty
+
     reviews = reviews.merge(model, on="order_id", how="inner")
     reviews = reviews[reviews["review_score"].notna()]
+    if reviews.empty:
+        return empty
 
     reviews["status"] = reviews["is_late"].map(
         {True: "Late", False: "On Time"}
     )
-    grp = reviews.groupby("status")["review_score"]
-    on_mean = float(grp.mean().get("On Time")) if "On Time" in grp.mean() else None
-    late_mean = float(grp.mean().get("Late")) if "Late" in grp.mean() else None
-    n_on = int(grp.count().get("On Time", 0))
-    n_late = int(grp.count().get("Late", 0))
+    means  = reviews.groupby("status")["review_score"].mean()
+    counts = reviews.groupby("status")["review_score"].count()
+
+    on_mean  = float(means["On Time"]) if "On Time" in means.index else None
+    late_mean = float(means["Late"])   if "Late"    in means.index else None
+    n_on   = int(counts["On Time"]) if "On Time" in counts.index else 0
+    n_late = int(counts["Late"])    if "Late"    in counts.index else 0
 
     gap = (on_mean - late_mean) if (
         on_mean is not None and late_mean is not None
     ) else None
-    gap_pct = (
-        100.0 * gap / on_mean if (gap is not None and on_mean) else None
-    )
+    gap_pct_raw = _safe_div(gap, on_mean) if gap is not None else None
+    gap_pct = (100.0 * gap_pct_raw) if gap_pct_raw is not None else None
 
     return {
-        "on_time": on_mean,
-        "late": late_mean,
-        "gap": gap,
-        "gap_pct": gap_pct,
-        "n_on": n_on,
-        "n_late": n_late,
+        "on_time": on_mean, "late": late_mean,
+        "gap": gap, "gap_pct": gap_pct,
+        "n_on": n_on, "n_late": n_late,
     }
-
-
-def fmt_int(v: Any) -> str:
-    return "—" if v is None or pd.isna(v) else f"{int(v):,}"
-
-
-def fmt_float(v: Any, p: int = 2) -> str:
-    return "—" if v is None or pd.isna(v) else f"{v:.{p}f}"
-
-
-def fmt_pct(v: Any, p: int = 1) -> str:
-    return "—" if v is None or pd.isna(v) else f"{v:.{p}f}%"
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -548,12 +577,15 @@ def _insight(year: str, states: Sequence[str], text: str) -> None:
 
 
 def _style_axes(ax: plt.Axes) -> None:
-    ax.spines["top"].set_visible(False)
-    ax.spines["right"].set_visible(False)
-    ax.spines["left"].set_visible(False)
-    ax.grid(axis="y", color=PALETTE.slate_200, linewidth=0.7)
-    ax.set_axisbelow(True)
-    ax.tick_params(axis="both", colors=PALETTE.slate_500, labelsize=10)
+    try:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+        ax.grid(axis="y", color=PALETTE.slate_200, linewidth=0.7)
+        ax.set_axisbelow(True)
+        ax.tick_params(axis="both", colors=PALETTE.slate_500, labelsize=10)
+    except Exception:
+        pass
 
 
 def _finish(fig: plt.Figure) -> None:
@@ -562,48 +594,53 @@ def _finish(fig: plt.Figure) -> None:
     except Exception:
         pass
     _st_pyplot(fig)
+    try:
+        plt.close(fig)
+    except Exception:
+        pass
 
 
 def _partial_note(year: str) -> None:
     if not is_partial_year(year):
         return
     detail = {
-        "2016": "2016 has only 3 active months (Sep, Oct, Dec) — "
-                "November has zero orders.",
+        "2016": "2016 has only 3 active months (Sep, Oct, Dec) — November has zero orders.",
         "2018": "2018 ends 17 Oct — not a full calendar year.",
-    }[year]
-    st.caption(f"⚠️ **Partial year — {year}.** {detail}")
+    }.get(year, "")
+    if detail:
+        st.caption(f"⚠️ **Partial year — {year}.** {detail}")
 
 
-def _safe_chart(fn, *args, **kwargs) -> None:
+def _safe_chart(fn: Callable[..., None], *args, **kwargs) -> None:
     try:
         fn(*args, **kwargs)
     except Exception as exc:
-        _LOGGER.exception("Chart %s failed", fn.__name__)
+        _LOGGER.exception("Chart %s failed", getattr(fn, "__name__", "?"))
         st.warning(f"⚠️ This chart could not render: {exc}")
 
 
-def _chart_card(fn, *args, **kwargs) -> None:
+def _chart_card(fn: Callable[..., None], *args, **kwargs) -> None:
     with st.container(border=True):
         _safe_chart(fn, *args, **kwargs)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6  CHARTS — Overview
+# §6  OVERVIEW CHARTS  (Q2, Q8)
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
-    """Q2 — row-level distribution (99,224 rows, 11.5/3.2/8.2/19.3/57.8%)."""
     st.markdown("### Review Score Distribution")
     df = _reviews_with_order_scope(year, states)
-    df = df[df["review_score"].notna()]
-
-    if df.empty:
-        _no_data()
-        return
+    df = df[df["review_score"].notna()] if not df.empty else df
+    if df is None or df.empty:
+        _no_data(); return
 
     counts = df["review_score"].round().astype(int).value_counts().sort_index()
+    if counts.empty:
+        _no_data(); return
     total = int(counts.sum())
+    if total == 0:
+        _no_data(); return
     pct = 100.0 * counts / total
 
     shades = [
@@ -628,32 +665,32 @@ def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
                 fontsize=10, color=PALETTE.slate_700, fontweight="bold")
     _finish(fig)
 
-    s5 = float(pct.get(5, 0))
-    s1 = float(pct.get(1, 0))
-    low_share = float(pct.loc[[1, 2]].sum()) if (1 in pct.index or 2 in pct.index) else 0.0
-    high_share = float(pct.loc[[4, 5]].sum()) if (4 in pct.index or 5 in pct.index) else 0.0
+    s5 = float(pct.get(5, 0.0)); s1 = float(pct.get(1, 0.0))
+    low_share  = float(pct.loc[pct.index.isin([1, 2])].sum())
+    high_share = float(pct.loc[pct.index.isin([4, 5])].sum())
     _insight(
         year, states,
         f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ while only "
         f"<b>{s1:.1f}%</b> are 1★ — promoters (4–5★) hold "
         f"<b>{high_share:.1f}%</b> vs detractors (1–2★) at "
-        f"<b>{low_share:.1f}%</b>, a healthy tail that hides the "
-        f"punctuality story."
+        f"<b>{low_share:.1f}%</b>."
     )
 
 
 def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
-    """Q8 — review volume by year: 326 / 45,044 / 53,854."""
     st.markdown("### Review Volume Share by Year")
     df = _reviews_with_order_scope(year, states)
-    df = df[df["review_score"].notna() & df["year"].notna()]
-
-    if df.empty:
-        _no_data()
-        return
+    if df is not None and not df.empty:
+        df = df[df["review_score"].notna() & df["year"].notna()]
+    if df is None or df.empty:
+        _no_data(); return
 
     counts = df.groupby("year").size().sort_index()
+    if counts.empty:
+        _no_data(); return
     total = int(counts.sum())
+    if total == 0:
+        _no_data(); return
     pct = 100.0 * counts / total
 
     colors = [
@@ -671,7 +708,6 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
     _style_axes(ax)
     ax.grid(axis="x", color=PALETTE.slate_200, linewidth=0.7)
     ax.grid(axis="y", visible=False)
-
     for b, n, p, y in zip(bars, counts.values, pct.values, counts.index):
         if y in PARTIAL_YEARS:
             label = f"⚠️ PARTIAL YEAR\n{p:.1f}% ({int(n):,})"
@@ -683,32 +719,29 @@ def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
                 b.get_y() + b.get_height() / 2, label,
                 va="center", fontsize=10, color=text_color,
                 fontweight="bold")
-
     _finish(fig)
 
     if any(y in PARTIAL_YEARS for y in counts.index):
         st.caption(
-            "⚠️ **Note on 2016 and 2018:** 2016 only contains 3 active months "
-            "(Sep–Dec) and 2018 ends on 17 October. These are **not full "
-            "calendar years**, so their review volume appears artificially "
-            "low."
+            "⚠️ **Note on 2016 and 2018:** 2016 only contains 3 active "
+            "months (Sep–Dec) and 2018 ends on 17 October. These are "
+            "**not full calendar years**, so their review volume appears "
+            "artificially low."
         )
 
-    biggest = counts.idxmax()
-    smallest = counts.idxmin()
+    biggest = counts.idxmax(); smallest = counts.idxmin()
     top2_share = float(pct.sort_values(ascending=False).head(2).sum())
     _insight(
         year, states,
         f"<b>{biggest}</b> dominates at {int(counts[biggest]):,} reviews "
         f"(<b>{pct[biggest]:.1f}%</b>); <b>{smallest}</b> trails at "
         f"{int(counts[smallest]):,} (<b>{pct[smallest]:.1f}%</b>). "
-        f"Together the top-2 years cover <b>{top2_share:.1f}%</b> of reviews "
-        f"— treat 2016/2018 shares as partial-year artefacts."
+        f"Top-2 years cover <b>{top2_share:.1f}%</b> of reviews."
     )
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.x  ADVANCED — Delivery Punctuality vs Satisfaction  (Q6, Q9)
+# §6.x  PUNCTUALITY  (Q6, Q9)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _late_severity(days_late: pd.Series) -> pd.Series:
@@ -719,35 +752,71 @@ def _late_severity(days_late: pd.Series) -> pd.Series:
     return out
 
 
+def _welch_ci(a: pd.Series, b: pd.Series, alpha: float = 0.05
+              ) -> tuple[float, float, float, float, float]:
+    nan = float("nan")
+    try:
+        import numpy as np
+    except Exception:
+        return nan, nan, nan, nan, nan
+    try:
+        na, nb = len(a), len(b)
+        if na < 2 or nb < 2:
+            return nan, nan, nan, nan, nan
+        diff = float(a.mean() - b.mean())
+        try:
+            from scipy import stats  # type: ignore
+        except Exception:
+            return diff, nan, nan, nan, nan
+        t, _p = stats.ttest_ind(a, b, equal_var=False, nan_policy="omit")
+        va, vb = float(a.var(ddof=1)), float(b.var(ddof=1))
+        se = float(np.sqrt(va / na + vb / nb))
+        denom = ((va / na) ** 2 / (na - 1) + (vb / nb) ** 2 / (nb - 1))
+        df_w = (va / na + vb / nb) ** 2 / denom if denom > 0 else nan
+        tcrit = float(stats.t.ppf(1 - alpha / 2, df_w)) if df_w == df_w else nan
+        ci_low  = diff - tcrit * se
+        ci_high = diff + tcrit * se
+        pooled = (float(np.sqrt(((na - 1) * va + (nb - 1) * vb) / (na + nb - 2)))
+                  if (na + nb - 2) > 0 else nan)
+        d = diff / pooled if pooled and pooled > 0 else nan
+        return diff, ci_low, ci_high, float(t), float(d)
+    except Exception:
+        return nan, nan, nan, nan, nan
+
+
+def _cohens_verdict(d: float) -> str:
+    if d != d:
+        return "n/a"
+    a = abs(d)
+    if a < 0.2: return "negligible"
+    if a < 0.5: return "small"
+    if a < 0.8: return "medium"
+    return "large"
+
+
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    """
-    Q6 — On-time vs late row-level averages.
-    Anchors: 88,171 @ 4.29 · 7,661 @ 2.57 · gap 1.73 (All)
-    Severity tiers add *order-grain* drill-down below this anchor.
-    """
     st.markdown("### Delivery Punctuality vs Satisfaction")
     st.caption(
         "Row-level on-time vs late anchors from Q6 · severity tiers use "
         "order-grain means for the dose–response drill-down."
     )
 
-    # ── Q6 anchors (row-level) ────────────────────────────────────────
     q6 = query_headline_gap(year, states)
     if q6["gap"] is None:
         _no_data("No delivered orders with both a delivery date and a review.")
         return
 
-    # ── Severity drill-down (order-grain) ────────────────────────────
     model = apply_filters(get_model(), year, list(states))
+    if model is None or model.empty:
+        _no_data(); return
     model = model[
         model["is_delivered"]
         & model["review_score_order"].notna()
         & model["days_late"].notna()
     ].copy()
     if model.empty:
-        _no_data()
-        return
+        _no_data(); return
     model["severity"] = _late_severity(model["days_late"])
     model["is_detractor"] = model["review_score_order"].le(2)
 
@@ -764,10 +833,11 @@ def chart_punctuality_vs_satisfaction(year: str,
              .dropna(subset=["orders"])
     )
     if grp.empty:
-        _no_data()
-        return
+        _no_data(); return
     grp["reliable"] = grp["orders"] >= PUNCT_MIN_N_TIER
     total_orders = float(grp["orders"].sum())
+    if total_orders <= 0:
+        _no_data(); return
     grp["tier_share"] = (100.0 * grp["orders"] / total_orders).round(1)
 
     tier_colors = {
@@ -792,24 +862,23 @@ def chart_punctuality_vs_satisfaction(year: str,
     ax1.set_ylabel("Avg review score (1–5)")
     ax1.set_ylim(1, 5.4)
     _style_axes(ax1)
-
     for b, s, n, share, reliable in zip(
         bars1, grp["avg_score"], grp["orders"], grp["tier_share"],
         grp["reliable"],
     ):
         label = f"{s:.2f}\nn={int(n):,} ({share:.1f}%)"
-        if not reliable:
-            label += " ⚠️"
+        if not reliable: label += " ⚠️"
         ax1.text(b.get_x() + b.get_width() / 2, s + 0.07,
                  label, ha="center", va="bottom", fontsize=9,
                  color=PALETTE.slate_700, fontweight="bold")
 
-    sel_avg = float(model["review_score_order"].mean())
+    sel_avg = _safe_mean(model["review_score_order"]) or 0.0
     ax1.axhline(sel_avg, color=PALETTE.slate_500, linestyle="--",
                 linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
     ax1.legend(loc="lower left", frameon=False, fontsize=9)
 
-    ymax = max(5.0, float((grp["detractor_rate"] * 100).max()) * 1.25)
+    dr_max = float((grp["detractor_rate"] * 100).max()) if len(grp) else 0.0
+    ymax = max(5.0, dr_max * 1.25)
     bars2 = ax2.bar(grp.index.astype(str), grp["detractor_rate"] * 100,
                     color=colors, edgecolor=PALETTE.white, linewidth=1.4,
                     width=0.62)
@@ -822,16 +891,13 @@ def chart_punctuality_vs_satisfaction(year: str,
     for b, p, reliable in zip(bars2, grp["detractor_rate"] * 100,
                               grp["reliable"]):
         label = f"{p:.1f}%"
-        if not reliable:
-            label += " ⚠️"
+        if not reliable: label += " ⚠️"
         ax2.text(b.get_x() + b.get_width() / 2, p + ymax * 0.02,
                  label, ha="center", va="bottom", fontsize=9,
                  color=PALETTE.slate_700, fontweight="bold")
-
     _finish(fig)
 
-    # ── Statistical verdict (Welch CI, order-grain) ─────────────────
-    on_scores = model.loc[model["severity"] == "On Time", "review_score_order"]
+    on_scores   = model.loc[model["severity"] == "On Time", "review_score_order"]
     late_scores = model.loc[model["severity"] != "On Time", "review_score_order"]
     n_on, n_late = len(on_scores), len(late_scores)
 
@@ -865,7 +931,6 @@ def chart_punctuality_vs_satisfaction(year: str,
         unsafe_allow_html=True,
     )
 
-    # ── What-if ──────────────────────────────────────────────────────
     st.markdown("#### 🎛️ What-if: convert late orders to on-time")
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
         pct = st.slider(
@@ -875,13 +940,14 @@ def chart_punctuality_vs_satisfaction(year: str,
             help="Projects the effect on the selection average. "
                  "Assumes converted orders land at the on-time mean.",
         )
-        on_mean = float(on_scores.mean())
-        late_mean = float(late_scores.mean())
+        on_mean   = _safe_mean(on_scores)   or 0.0
+        late_mean = _safe_mean(late_scores) or 0.0
         new_total = n_on + n_late
         converted = n_late * pct / 100.0
-        new_mean = (n_on * on_mean
-                    + (n_late - converted) * late_mean
-                    + converted * on_mean) / new_total
+        new_mean = ((n_on * on_mean
+                     + (n_late - converted) * late_mean
+                     + converted * on_mean) / new_total
+                    if new_total > 0 else sel_avg)
         c1, c2, c3 = st.columns(3)
         c1.metric("Late orders fixed", f"{converted:,.0f}",
                   delta=f"{pct}% of {n_late:,}")
@@ -892,15 +958,16 @@ def chart_punctuality_vs_satisfaction(year: str,
         st.caption("Widen the filters to enable the what-if calculator.")
 
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
-        on_mean = float(on_scores.mean())
-        late_mean = float(late_scores.mean())
+        on_mean   = _safe_mean(on_scores)   or 0.0
+        late_mean = _safe_mean(late_scores) or 0.0
         new_total = n_on + n_late
         scen_rows = []
         for p in PUNCT_SCENARIOS:
             conv = n_late * p / 100.0
-            nm = (n_on * on_mean
-                  + (n_late - conv) * late_mean
-                  + conv * on_mean) / new_total
+            nm = ((n_on * on_mean
+                   + (n_late - conv) * late_mean
+                   + conv * on_mean) / new_total
+                  if new_total > 0 else sel_avg)
             scen_rows.append({
                 "Scenario":           f"{p}% of late → on-time",
                 "Late orders fixed":  f"{conv:,.0f}",
@@ -910,22 +977,26 @@ def chart_punctuality_vs_satisfaction(year: str,
         with st.expander("📋 Full sensitivity table (5%, 10%, 25%, 50%)",
                          expanded=False):
             _st_dataframe(pd.DataFrame(scen_rows))
-            lift_1pct = (n_late * 0.01 * (on_mean - late_mean)) / new_total
+            lift_1pct = ((n_late * 0.01 * (on_mean - late_mean)) / new_total
+                         if new_total else 0.0)
             st.caption(
                 f"Stars gained per 1% of late orders converted = "
                 f"**{lift_1pct:+.4f}★**."
             )
 
-    # ── Insight ──────────────────────────────────────────────────────
     q6_gap_txt = f"{q6['gap']:.2f}★"
-    q6_gap_pct = f"{q6['gap_pct']:.1f}%" if q6["gap_pct"] is not None else "—"
-    late_share = float(
-        grp.loc[[i for i in grp.index if i != "On Time"], "tier_share"].sum()
-    )
-    noisy = int((~grp["reliable"]).sum())
+    q6_gap_pct = (f"{q6['gap_pct']:.1f}%"
+                  if q6["gap_pct"] is not None else "—")
+    late_share = float(grp.loc[grp.index != "On Time", "tier_share"].sum()) \
+        if len(grp) else 0.0
+    noisy = int((~grp["reliable"]).sum()) if len(grp) else 0
     noisy_txt = (f" {noisy} tier(s) flagged ⚠️ (n < {PUNCT_MIN_N_TIER})."
                  if noisy else "")
-    top_det = grp["detractor_rate"].idxmax()
+    top_det = grp["detractor_rate"].idxmax() if len(grp) else grp.index[0]
+    on_time_dr = (float(grp.loc["On Time", "detractor_rate"] * 100)
+                  if "On Time" in grp.index else 0.0)
+    top_dr = float(grp.loc[top_det, "detractor_rate"] * 100) if len(grp) else 0.0
+
     _insight(
         year, states,
         f"<b>Q6 anchor:</b> on-time <b>{q6['on_time']:.2f}★</b> "
@@ -933,44 +1004,44 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"(n={q6['n_late']:,}) — gap <b>{q6_gap_txt}</b> "
         f"(<b>{q6_gap_pct}</b>) across <b>{late_share:.1f}%</b> of orders "
         f"that arrived late. 1–2★ share jumps from "
-        f"<b>{grp.loc['On Time','detractor_rate']*100:.1f}%</b> to "
-        f"<b>{grp.loc[top_det,'detractor_rate']*100:.1f}%</b> at peak "
+        f"<b>{on_time_dr:.1f}%</b> to <b>{top_dr:.1f}%</b> at peak "
         f"severity.{noisy_txt}"
     )
-
     _partial_note(year)
 
 
 def chart_satisfaction_by_delivery_bucket(year: str,
                                           states: tuple[str, ...]) -> None:
-    """
-    Q9 — row-level AVG(review_score) per delivery-time bucket.
-    Anchors (All): 0-5d=4.45 (13,374) · 6-10d=4.36 (32,885) ·
-                   11-20d=4.22 (35,547) · 21-30d=3.69 (9,588) ·
-                   30+d=2.26 (4,438).
-    """
     st.markdown("### Satisfaction by Delivery-Time Bucket")
 
     df = _reviews_with_order_scope(year, states, delivered_only=True)
-    if df.empty:
-        _no_data()
-        return
+    if df is None or df.empty:
+        _no_data(); return
 
     model = apply_filters(get_model(), year, list(states))
+    if model is None or model.empty:
+        _no_data(); return
     model = model[model["is_delivered"]][["order_id", "delivery_days"]]
+    if model.empty:
+        _no_data(); return
+
     df = df.merge(model, on="order_id", how="inner")
     df = df[df["review_score"].notna() & df["delivery_days"].notna()]
     if df.empty:
-        _no_data()
-        return
+        _no_data(); return
 
     bins = [0, 5, 10, 20, 30, float("inf")]
     labels = ["0-5 days", "6-10 days", "11-20 days", "21-30 days", "30+ days"]
     df = df.copy()
-    df["bucket"] = pd.cut(df["delivery_days"], bins=bins,
-                          labels=labels, include_lowest=True)
+    try:
+        df["bucket"] = pd.cut(df["delivery_days"], bins=bins,
+                              labels=labels, include_lowest=True)
+    except Exception:
+        _no_data(); return
+    df = df[df["bucket"].notna()]
+    if df.empty:
+        _no_data(); return
 
-    # Q9 counts DISTINCT orders — but averages at row grain.
     grp = df.groupby("bucket", observed=False).agg(
         orders=("order_id", "nunique"),
         reviews=("review_score", "count"),
@@ -978,10 +1049,11 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     ).reset_index()
     grp = grp[grp["orders"] > 0]
     if grp.empty:
-        _no_data()
-        return
+        _no_data(); return
 
-    total_orders = grp["orders"].sum()
+    total_orders = float(grp["orders"].sum())
+    if total_orders <= 0:
+        _no_data(); return
     grp["share"] = 100.0 * grp["orders"] / total_orders
     sel_avg = float((grp["avg_score"] * grp["orders"]).sum() / total_orders)
 
@@ -1029,14 +1101,10 @@ def chart_satisfaction_by_delivery_bucket(year: str,
             if not below.empty else
             "No bucket falls below the selection average."
         )
-        fast_share = float(
-            grp.loc[grp["bucket"].astype(str).isin(["0-5 days", "6-10 days"]),
-                    "share"].sum()
-        )
-        slow_share = float(
-            grp.loc[grp["bucket"].astype(str).isin(["21-30 days", "30+ days"]),
-                    "share"].sum()
-        )
+        fast_share = float(grp.loc[grp["bucket"].astype(str).isin(
+            ["0-5 days", "6-10 days"]), "share"].sum())
+        slow_share = float(grp.loc[grp["bucket"].astype(str).isin(
+            ["21-30 days", "30+ days"]), "share"].sum())
         text = (f"Scores drop <b>{first['avg_score']:.2f}★</b> "
                 f"({first['bucket']}, <b>{fast_share:.1f}%</b> of orders) → "
                 f"<b>{last['avg_score']:.2f}★</b> ({last['bucket']}, "
@@ -1046,22 +1114,16 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.y  CHARTS — Geography  (Q4, Q5, Q12)
+# §6.y  GEOGRAPHY  (Q4, Q5, Q12)
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
-    """
-    Q4 — Avg review score by state (top 10 by orders), row-level AVG.
-    Anchors (All): SP 4.17 (41,472) · RJ 3.88 (12,687) · MG 4.14 (11,554) …
-    Q12 — Lowest scoring states with ≥2,000 orders appears in the insight.
-    """
     df = _reviews_with_order_scope(year, states)
-    df = df[df["review_score"].notna() & df["customer_state"].notna()]
-
-    if df.empty:
+    if df is not None and not df.empty:
+        df = df[df["review_score"].notna() & df["customer_state"].notna()]
+    if df is None or df.empty:
         st.markdown("### Average Review Score by State *(top 10)*")
-        _no_data()
-        return
+        _no_data(); return
 
     grp = (df.groupby("customer_state")
              .agg(
@@ -1072,16 +1134,23 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
              .reset_index()
              .sort_values("orders", ascending=False)
              .head(10))
+    if grp.empty:
+        _no_data(); return
     total_orders = float(grp["orders"].sum())
+    if total_orders <= 0:
+        _no_data(); return
     grp["share"] = 100.0 * grp["orders"] / total_orders
 
-    n_states = len(grp)
+    n_states  = len(grp)
     title_cap = ("top 10" if n_states >= 10
                  else f"{n_states} state{'s' if n_states != 1 else ''}")
     scope_txt = "in current selection" if states else "by orders"
     st.markdown(f"### Average Review Score by State *({title_cap} {scope_txt})*")
 
     plot_df = grp.sort_values("avg_score", ascending=True)
+    if plot_df.empty:
+        _no_data(); return
+
     colors = [
         PALETTE.danger if s < 4.00
         else PALETTE.warn if s < 4.10
@@ -1109,14 +1178,13 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
                 color=PALETTE.slate_700, fontweight="bold")
     _finish(fig)
 
-    # Q12 — lowest-scoring states (≥2,000 orders), filtered to current scope
     q12 = (df.groupby("customer_state")
              .agg(
                  orders=("order_id", "nunique"),
                  avg_score=("review_score", "mean"),
              )
              .reset_index()
-             .query("orders >= 2000")
+             .query(f"orders >= {CONFIG.q12_min_orders}")
              .sort_values("avg_score", ascending=True)
              .head(3))
 
@@ -1127,7 +1195,9 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
     else:
         low, high = plot_df.iloc[0], plot_df.iloc[-1]
         spread = high["avg_score"] - low["avg_score"]
-        spread_pct = 100.0 * spread / high["avg_score"]
+        spread_pct = (100.0 * _safe_div(spread, high["avg_score"])
+                      if _safe_div(spread, high["avg_score"]) is not None
+                      else 0.0)
         weak = plot_df.loc[plot_df["avg_score"] < 4.10]
         weak_share = float(weak["share"].sum())
         q12_txt = ""
@@ -1143,25 +1213,119 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
                 f"anchors the low end and <b>{high['customer_state']}</b> "
                 f"({high['avg_score']:.2f}★, {high['share']:.1f}%) the high "
                 f"end — a {spread:.2f}★ spread (<b>{spread_pct:.1f}%</b>) "
-                f"that's dwarfed by the on-time↔late gap. "
-                f"<b>{weak_share:.1f}%</b> of orders sit in states "
-                f"scoring &lt; 4.10★.{q12_txt}")
+                f"dwarfed by the on-time↔late gap. "
+                f"<b>{weak_share:.1f}%</b> of orders sit in states scoring "
+                f"&lt; 4.10★.{q12_txt}")
     _insight(year, states, text)
 
 
+def chart_lowest_scoring_states(year: str, states: tuple[str, ...]) -> None:
+    st.markdown("### Lowest-Scoring States *(min 2,000 orders)*")
+    st.caption(
+        "Q12 · filterable · HAVING orders ≥ 2,000 · ranked ascending by "
+        "row-level AVG(review_score)."
+    )
+
+    df = _reviews_with_order_scope(year, states)
+    if df is not None and not df.empty:
+        df = df[df["review_score"].notna() & df["customer_state"].notna()]
+    if df is None or df.empty:
+        _no_data(); return
+
+    grp = (df.groupby("customer_state")
+             .agg(
+                 orders=("order_id", "nunique"),
+                 reviews=("review_score", "count"),
+                 avg_score=("review_score", "mean"),
+             )
+             .reset_index()
+             .query(f"orders >= {CONFIG.q12_min_orders}")
+             .sort_values("avg_score", ascending=True)
+             .head(10))
+
+    if grp.empty:
+        _no_data(
+            f"No state in the current selection has ≥ "
+            f"{CONFIG.q12_min_orders:,} orders. Widen the filters."
+        ); return
+
+    total_orders = float(grp["orders"].sum())
+    if total_orders <= 0:
+        _no_data(); return
+    grp["share"] = 100.0 * grp["orders"] / total_orders
+
+    colors = [
+        PALETTE.danger if s < 3.90
+        else PALETTE.warn if s < 4.10
+        else PALETTE.success
+        for s in grp["avg_score"]
+    ]
+
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
+    bars = ax.barh(
+        grp["customer_state"], grp["avg_score"],
+        color=colors, edgecolor=PALETTE.white, linewidth=1.4,
+    )
+    ax.set_title(
+        "Lowest-Scoring States (min 2,000 orders) · row-level AVG",
+        pad=14, loc="left",
+    )
+    ax.set_xlabel("Average review score (1–5)")
+    ax.set_xlim(0, 5.0)
+    ax.invert_yaxis()
+    _style_axes(ax)
+    ax.grid(axis="x", color=PALETTE.slate_200, linewidth=0.7)
+    ax.grid(axis="y", visible=False)
+    ax.axvline(4.00, color=PALETTE.slate_300, linestyle=":", linewidth=1.0)
+    ax.axvline(4.10, color=PALETTE.slate_300, linestyle=":", linewidth=1.0)
+    for b, s, n, share in zip(bars, grp["avg_score"], grp["orders"],
+                              grp["share"]):
+        ax.text(s + 0.04, b.get_y() + b.get_height() / 2,
+                f"{s:.2f}  (n={int(n):,}, {share:.1f}%)",
+                va="center", fontsize=9,
+                color=PALETTE.slate_700, fontweight="bold")
+    _finish(fig)
+
+    worst  = grp.iloc[0]
+    second = grp.iloc[1] if len(grp) > 1 else None
+    best_in_grp = grp.iloc[-1]
+    below_4 = grp.loc[grp["avg_score"] < 4.00]
+    below_4_share = float(below_4["share"].sum())
+
+    worst_txt = (f"<b>{worst['customer_state']}</b> bottoms out at "
+                 f"<b>{worst['avg_score']:.2f}★</b> across "
+                 f"{int(worst['orders']):,} orders "
+                 f"({worst['share']:.1f}% of this cohort)")
+    second_txt = ""
+    if second is not None:
+        gap_12 = worst["avg_score"] - second["avg_score"]
+        second_txt = (f"; <b>{second['customer_state']}</b> follows at "
+                      f"<b>{second['avg_score']:.2f}★</b> "
+                      f"(a {abs(gap_12):.2f}★ gap)")
+    tail_txt = (
+        f" Only <b>{below_4_share:.1f}%</b> of orders in this cohort sit "
+        f"below 4.00★."
+        if below_4_share > 0 else
+        " No state in this cohort is below 4.00★."
+    )
+    _insight(
+        year, states,
+        f"{worst_txt}{second_txt}. Cohort spans "
+        f"<b>{worst['avg_score']:.2f}★</b> → "
+        f"<b>{best_in_grp['avg_score']:.2f}★</b> "
+        f"(<b>{best_in_grp['customer_state']}</b>).{tail_txt}"
+    )
+    _partial_note(year)
+
+
 def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
-    """
-    Q5 — On-time vs late by state (top 5 by delivered count).
-    Anchors (All): SP 40,501 (5.9%) · RJ 12,350 (13.5%) · MG 11,354 (5.6%) ·
-                   RS 5,345 (7.1%) · PR 4,923 (5.0%).
-    """
     st.markdown("### On-Time vs Late by State *(top 5)*")
     df = apply_filters(get_model(), year, list(states))
+    if df is None or df.empty:
+        _no_data(); return
     df = df[df["is_delivered"] & df["customer_state"].notna()]
-
     if df.empty:
-        _no_data()
-        return
+        _no_data(); return
 
     grp = (df.groupby("customer_state")
              .agg(
@@ -1171,7 +1335,10 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
              .reset_index()
              .sort_values("delivered", ascending=False)
              .head(5))
-    grp["on_time"] = grp["delivered"] - grp["late"]
+    grp = grp[grp["delivered"] > 0]
+    if grp.empty:
+        _no_data(); return
+    grp["on_time"]  = grp["delivered"] - grp["late"]
     grp["late_pct"] = 100.0 * grp["late"] / grp["delivered"]
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE)
@@ -1187,12 +1354,10 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
     ax.set_xticklabels(grp["customer_state"])
     ax.set_title("On-Time vs Late Deliveries by State (top 5)",
                  pad=14, loc="left")
-    ax.set_xlabel("State")
-    ax.set_ylabel("Delivered orders")
+    ax.set_xlabel("State"); ax.set_ylabel("Delivered orders")
     ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
     _style_axes(ax)
     ax.legend(frameon=False, loc="upper right")
-
     ymax = float(max(grp["delivered"].max(), 1)) * 1.18
     ax.set_ylim(0, ymax)
     for i, (_, r) in enumerate(grp.iterrows()):
@@ -1200,40 +1365,36 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
                 f"{r['late_pct']:.1f}%",
                 ha="center", va="bottom", fontsize=9,
                 color=PALETTE.danger, fontweight="bold")
-
     _finish(fig)
 
-    overall_pct = 100.0 * grp["late"].sum() / grp["delivered"].sum()
+    overall_pct = (100.0 * _safe_div(grp["late"].sum(),
+                                     grp["delivered"].sum()) or 0.0)
     worst = grp.loc[grp["late_pct"].idxmax()]
-    best = grp.loc[grp["late_pct"].idxmin()]
-    worst_mx = worst["late_pct"] / overall_pct if overall_pct else float("nan")
+    best  = grp.loc[grp["late_pct"].idxmin()]
+    worst_mx = (worst["late_pct"] / overall_pct
+                if overall_pct else float("nan"))
     _insight(
         year, states,
         f"Top-5 states average <b>{overall_pct:.1f}%</b> late; "
         f"<b>{worst['customer_state']}</b> is worst at "
-        f"<b>{worst['late_pct']:.1f}%</b> "
-        f"(<b>{worst_mx:.1f}×</b> the group average) and "
-        f"<b>{best['customer_state']}</b> best at "
+        f"<b>{worst['late_pct']:.1f}%</b> (<b>{worst_mx:.1f}×</b> group avg) "
+        f"and <b>{best['customer_state']}</b> best at "
         f"<b>{best['late_pct']:.1f}%</b> — a "
         f"<b>{worst['late_pct'] - best['late_pct']:.1f} pp</b> spread."
     )
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.z  CHART — Monthly trend  (Q3)
+# §6.z  MONTHLY TREND  (Q3)
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
-    """
-    Q3 — monthly AVG(review_score) at ROW grain (not per-order).
-    """
     st.markdown("### Monthly Average Review Score")
-
     df = _reviews_with_order_scope(year, states)
-    df = df[df["review_score"].notna() & df["month"].notna()]
-    if df.empty:
-        _no_data()
-        return
+    if df is not None and not df.empty:
+        df = df[df["review_score"].notna() & df["month"].notna()]
+    if df is None or df.empty:
+        _no_data(); return
 
     grp = (df.groupby("month")
              .agg(
@@ -1244,8 +1405,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
              .reset_index()
              .sort_values("month"))
     if grp.empty:
-        _no_data()
-        return
+        _no_data(); return
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     ax.plot(grp["month"], grp["avg_score"], marker="o",
@@ -1253,9 +1413,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
             markerfacecolor=PALETTE.white, markeredgewidth=1.8)
     ax.set_title("Monthly Average Review Score (row-level AVG)",
                  pad=14, loc="left")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Avg review score (1–5)")
-
+    ax.set_xlabel("Month"); ax.set_ylabel("Avg review score (1–5)")
     lo = max(1.0, float(grp["avg_score"].min()) - 0.2)
     hi = min(5.0, float(grp["avg_score"].max()) + 0.2)
     if hi - lo < 0.5:
@@ -1263,7 +1421,6 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         lo, hi = max(1.0, mid - 0.25), min(5.0, mid + 0.25)
     ax.set_ylim(lo, hi)
     _style_axes(ax)
-
     n = len(grp)
     if n > 12:
         step = max(1, n // 12)
@@ -1274,7 +1431,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     else:
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
-    low_i = grp["avg_score"].idxmin()
+    low_i  = grp["avg_score"].idxmin()
     high_i = grp["avg_score"].idxmax()
     ax.scatter([grp.loc[low_i, "month"]], [grp.loc[low_i, "avg_score"]],
                s=170, color=PALETTE.danger, zorder=5,
@@ -1290,16 +1447,16 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     _finish(fig)
 
     noisy = int((grp["reviews"] < CONFIG.min_reviews_per_month).sum())
-    noisy_pct = 100.0 * noisy / len(grp) if len(grp) else 0.0
+    noisy_pct = (100.0 * _safe_div(noisy, len(grp))
+                 if _safe_div(noisy, len(grp)) is not None else 0.0)
     note = (
         f" <b>{noisy_pct:.1f}%</b> of months have < "
         f"{CONFIG.min_reviews_per_month} reviews — noisy averages."
     ) if noisy else ""
     swing = grp.loc[high_i, "avg_score"] - grp.loc[low_i, "avg_score"]
-    swing_pct = (
-        100.0 * swing / grp.loc[high_i, "avg_score"]
-        if grp.loc[high_i, "avg_score"] else float("nan")
-    )
+    swing_pct = (100.0 * _safe_div(swing, grp.loc[high_i, "avg_score"])
+                 if _safe_div(swing, grp.loc[high_i, "avg_score"]) is not None
+                 else 0.0)
     _insight(
         year, states,
         f"Lowest <b>{grp.loc[low_i,'month']}</b> "
@@ -1309,11 +1466,6 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         f"<b>{swing:.2f}★</b> (<b>{swing_pct:.1f}%</b>) seasonal swing "
         f"that stays small next to the late-delivery gap.{note}"
     )
-    _partial_year_note(year)
-
-
-def _partial_year_note(year: str) -> None:
-    """Alias kept for backward compatibility with earlier partial-year captions."""
     _partial_note(year)
 
 
@@ -1327,7 +1479,9 @@ def load_brazil_geojson() -> dict[str, Any] | None:
         try:
             r = requests.get(url, timeout=CONFIG.geojson_timeout_seconds)
             r.raise_for_status()
-            return r.json()
+            data = r.json()
+            if isinstance(data, dict) and "features" in data:
+                return data
         except (requests.RequestException, ValueError) as exc:
             _LOGGER.warning("GeoJSON mirror failed: %s — %s", url, exc)
     return None
@@ -1335,7 +1489,11 @@ def load_brazil_geojson() -> dict[str, Any] | None:
 
 def _geojson_to_gdf(geojson: dict[str, Any]) -> pd.DataFrame:
     rows = []
-    for feat in geojson.get("features", []):
+    if not isinstance(geojson, dict):
+        return pd.DataFrame()
+    for feat in geojson.get("features", []) or []:
+        if not isinstance(feat, dict):
+            continue
         props = feat.get("properties", {}) or {}
         sigla = (
             props.get("sigla") or props.get("SIGLA")
@@ -1344,43 +1502,55 @@ def _geojson_to_gdf(geojson: dict[str, Any]) -> pd.DataFrame:
         )
         if not sigla:
             continue
-        rows.append({"state": str(sigla).upper(),
-                     "geometry": feat.get("geometry", {})})
+        geom = feat.get("geometry", {}) or {}
+        if not isinstance(geom, dict):
+            continue
+        rows.append({"state": str(sigla).upper(), "geometry": geom})
     return pd.DataFrame(rows)
 
 
 def _plot_geo(ax, geometry, facecolor,
               edgecolor=PALETTE.white, linewidth=0.6):
-    gtype = geometry.get("type")
-    coords = geometry.get("coordinates")
-    if not gtype or not coords:
-        return
-    polys = [coords] if gtype == "Polygon" else (
-        coords if gtype == "MultiPolygon" else []
-    )
-    for poly in polys:
-        for ring_idx, ring in enumerate(poly):
-            if not ring:
+    try:
+        gtype  = geometry.get("type")
+        coords = geometry.get("coordinates")
+        if not gtype or not coords:
+            return
+        polys = [coords] if gtype == "Polygon" else (
+            coords if gtype == "MultiPolygon" else []
+        )
+        for poly in polys:
+            if not isinstance(poly, (list, tuple)):
                 continue
-            xs = [pt[0] for pt in ring]
-            ys = [pt[1] for pt in ring]
-            ax.fill(xs, ys, facecolor=facecolor, edgecolor=edgecolor,
-                    linewidth=linewidth,
-                    zorder=2 if ring_idx == 0 else 3)
+            for ring_idx, ring in enumerate(poly):
+                if not ring:
+                    continue
+                xs = [pt[0] for pt in ring
+                      if isinstance(pt, (list, tuple)) and len(pt) >= 2]
+                ys = [pt[1] for pt in ring
+                      if isinstance(pt, (list, tuple)) and len(pt) >= 2]
+                if not xs:
+                    continue
+                ax.fill(xs, ys, facecolor=facecolor, edgecolor=edgecolor,
+                        linewidth=linewidth,
+                        zorder=2 if ring_idx == 0 else 3)
+    except Exception:
+        pass
 
 
 def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     st.markdown("### Brazil Map · Delivered Orders")
-
     df = get_model()
+    if df is None or df.empty:
+        _no_data(); return
     df = df[df["is_delivered"] & df["customer_state"].notna()]
     if year != "All":
         df = df[df["year"] == year]
+    if df.empty:
+        _no_data("No state-level data for this year."); return
     counts = df.groupby("customer_state")["order_id"].nunique()
-
     if counts.empty:
-        _no_data("No state-level data for this year.")
-        return
+        _no_data("No state-level data for this year."); return
 
     geojson = load_brazil_geojson()
     if not geojson:
@@ -1395,6 +1565,8 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     filter_active = bool(states)
     orders_by_state = counts.to_dict()
     total_orders = float(sum(orders_by_state.values()))
+    if total_orders <= 0:
+        _no_data(); return
 
     hi = float(max(orders_by_state.values())) * 1.05
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
@@ -1419,19 +1591,22 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         geom = row["geometry"]
         n = orders_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
-        gtype, coords = geom.get("type"), geom.get("coordinates")
-        if not gtype or not coords:
+        try:
+            gtype, coords = geom.get("type"), geom.get("coordinates")
+            if not gtype or not coords:
+                continue
+            if gtype == "Polygon":
+                ring = coords[0]
+            elif gtype == "MultiPolygon":
+                ring = max(coords, key=lambda p: len(p[0]))[0]
+            else:
+                continue
+            if not ring:
+                continue
+            cx = sum(pt[0] for pt in ring) / len(ring)
+            cy = sum(pt[1] for pt in ring) / len(ring)
+        except Exception:
             continue
-        if gtype == "Polygon":
-            ring = coords[0]
-        elif gtype == "MultiPolygon":
-            ring = max(coords, key=lambda p: len(p[0]))[0]
-        else:
-            continue
-        if not ring:
-            continue
-        cx = sum(pt[0] for pt in ring) / len(ring)
-        cy = sum(pt[1] for pt in ring) / len(ring)
         share = (100.0 * n / total_orders
                  if (n is not None and total_orders) else None)
         if n is not None and in_scope:
@@ -1447,8 +1622,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         ax.text(cx, cy, label, ha="center", va="center",
                 fontsize=5.5, color=color, fontweight=weight, zorder=5)
 
-    ax.set_xlim(-74.0, -34.0)
-    ax.set_ylim(-34.0, 6.0)
+    ax.set_xlim(-74.0, -34.0); ax.set_ylim(-34.0, 6.0)
     ax.set_aspect("equal")
 
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -1458,7 +1632,6 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     cbar.set_label("Delivered orders", fontsize=10,
                    color=PALETTE.slate_500)
     cbar.ax.tick_params(labelsize=9)
-
     _finish(fig)
 
     in_scope_pairs = [(s, v) for s, v in orders_by_state.items()
@@ -1468,20 +1641,23 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         return
     lo_s, lo_v = min(in_scope_pairs, key=lambda x: x[1])
     hi_s, hi_v = max(in_scope_pairs, key=lambda x: x[1])
-    hi_pct = 100.0 * hi_v / total_orders if total_orders else 0.0
+    hi_pct = (100.0 * _safe_div(hi_v, total_orders)
+              if _safe_div(hi_v, total_orders) is not None else 0.0)
+    lo_pct = (100.0 * _safe_div(lo_v, total_orders)
+              if _safe_div(lo_v, total_orders) is not None else 0.0)
     top3 = sorted(in_scope_pairs, key=lambda x: x[1], reverse=True)[:3]
-    top3_pct = (100.0 * sum(v for _, v in top3) / total_orders
-                if total_orders else 0.0)
+    top3_pct = (100.0 * _safe_div(sum(v for _, v in top3), total_orders)
+                if _safe_div(sum(v for _, v in top3), total_orders) is not None
+                else 0.0)
     mode = ("Selected states coloured; rest greyed."
             if filter_active else
             "All 27 states coloured by delivered count.")
     _insight(
         year, states,
         f"<b>{hi_s}</b> carries the largest volume ({int(hi_v):,}, "
-        f"<b>{hi_pct:.1f}%</b> of orders); <b>{lo_s}</b> the smallest "
-        f"({int(lo_v):,}, <b>{100.0*lo_v/total_orders:.1f}%</b>). "
-        f"The top-3 states concentrate <b>{top3_pct:.1f}%</b> of deliveries. "
-        f"{mode}"
+        f"<b>{hi_pct:.1f}%</b>); <b>{lo_s}</b> the smallest "
+        f"({int(lo_v):,}, <b>{lo_pct:.1f}%</b>). Top-3 states concentrate "
+        f"<b>{top3_pct:.1f}%</b> of deliveries. {mode}"
     )
 
 
@@ -1522,8 +1698,10 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
         body = ("<span>Only one delivery status in this selection — "
                 "no gap to compute.</span>")
     else:
-        body = (f'<strong>Late deliveries cost {g["gap"]:.2f} stars '
-                f'({g["gap_pct"]:.1f}%).</strong> '
+        gap_pct_txt = (f" ({g['gap_pct']:.1f}%)"
+                       if g["gap_pct"] is not None else "")
+        body = (f'<strong>Late deliveries cost {g["gap"]:.2f} stars'
+                f'{gap_pct_txt}.</strong> '
                 f'<span>On-time <b>{g["on_time"]:.2f}</b> · '
                 f'Late <b>{g["late"]:.2f}</b>.</span>')
     st.sidebar.markdown(
@@ -1540,24 +1718,21 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
 def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
     g = query_headline_gap(year, states)
     scope = scope_label(year, states)
-
     if g["gap"] is None:
-        body = (
-            "Delivery punctuality is the strongest satisfaction driver "
-            "in this dataset. Only one delivery status appears in the "
-            "current selection — widen the filters to compare on-time "
-            "and late orders."
-        )
+        body = ("Delivery punctuality is the strongest satisfaction driver "
+                "in this dataset. Only one delivery status appears in the "
+                "current selection — widen the filters to compare on-time "
+                "and late orders.")
     else:
+        gap_pct_txt = (f"<b>{g['gap_pct']:.1f}%</b>"
+                       if g["gap_pct"] is not None else "—")
         body = (
             f'Late deliveries cost <b>{g["gap"]:.2f} stars</b> '
-            f'(<b>{g["gap_pct"]:.1f}%</b>) — the single strongest '
-            f'satisfaction driver. On-time orders average '
-            f'<b>{g["on_time"]:.2f} stars</b>; late orders average '
-            f'<b>{g["late"]:.2f} stars</b>. This gap dwarfs every '
-            f'state-level difference.'
+            f'({gap_pct_txt}) — the single strongest satisfaction driver. '
+            f'On-time orders average <b>{g["on_time"]:.2f} stars</b>; '
+            f'late orders average <b>{g["late"]:.2f} stars</b>. '
+            f'This gap dwarfs every state-level difference.'
         )
-
     st.markdown(
         f"""
         <div class="hero-banner">
@@ -1576,6 +1751,8 @@ def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
     g = query_headline_gap(year, states)
     if g["gap"] is None:
         return
+    gap_pct_txt = (f"<b>{g['gap_pct']:.1f}%</b>"
+                   if g["gap_pct"] is not None else "—")
     st.markdown(
         f"""
         <div class="headline-strip">
@@ -1584,8 +1761,8 @@ def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
             <span class="headline-strip-label">Headline finding · {scope_label(year, states)}</span>
             <p style="margin:0;">
               Late deliveries cost <b>{g['gap']:.2f}★</b>
-              (<b>{g['gap_pct']:.1f}%</b>) — the strongest satisfaction
-              driver. See the Customer Satisfaction tab for the evidence.
+              ({gap_pct_txt}) — the strongest satisfaction driver. See the
+              Customer Satisfaction tab for the evidence.
             </p>
           </div>
         </div>
@@ -1602,9 +1779,11 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
         return
 
     d1, d2, d3 = st.columns(3)
-    d1.metric("On-Time Avg Score", f"{g['on_time']:.2f}★",
+    d1.metric("On-Time Avg Score",
+              "—" if g["on_time"] is None else f"{g['on_time']:.2f}★",
               delta=f"n={g['n_on']:,}", delta_color="off")
-    d2.metric("Late Avg Score", f"{g['late']:.2f}★",
+    d2.metric("Late Avg Score",
+              "—" if g["late"] is None else f"{g['late']:.2f}★",
               delta=f"n={g['n_late']:,}", delta_color="off")
     d3.metric("Star Gap (Driver)", f"{g['gap']:.2f}★",
               delta=(f"{g['gap_pct']:.1f}% of on-time"
@@ -1625,21 +1804,19 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
     elif g["gap"] >= 1.5:
         verdict_txt, verdict_color = "Critical priority", PALETTE.danger
     elif g["gap"] >= 1.0:
-        verdict_txt, verdict_color = "High priority", PALETTE.warn
+        verdict_txt, verdict_color = "High priority",   PALETTE.warn
     elif g["gap"] >= 0.5:
-        verdict_txt, verdict_color = "Moderate", PALETTE.accent
+        verdict_txt, verdict_color = "Moderate",        PALETTE.accent
     else:
-        verdict_txt, verdict_color = "Healthy", PALETTE.success
+        verdict_txt, verdict_color = "Healthy",         PALETTE.success
 
     gap_txt = f"{g['gap']:.2f}★" if g["gap"] is not None else "—"
-    gap_pct_txt = (
-        f" ({g['gap_pct']:.1f}%)" if g["gap_pct"] is not None else ""
-    )
-    avg_txt = f"{k['avg_review_score']:.2f}★" if k["avg_review_score"] else "—"
-    late_pct_txt = (
-        f"<b>{k['late_pct']:.1f}%</b> of delivered orders"
-        if k["late_pct"] is not None else "late orders"
-    )
+    gap_pct_txt = (f" ({g['gap_pct']:.1f}%)"
+                   if g["gap_pct"] is not None else "")
+    avg_txt = (f"{k['avg_review_score']:.2f}★"
+               if k["avg_review_score"] is not None else "—")
+    late_pct_txt = (f"<b>{k['late_pct']:.1f}%</b> of delivered orders"
+                    if k["late_pct"] is not None else "late orders")
 
     st.markdown(
         f"""
@@ -1671,7 +1848,6 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
 
 def render_priority_matrix() -> None:
     st.markdown("### 🎯 Priority Matrix — Impact × Effort")
-
     items = pd.DataFrame([
         {"id": "R1", "action": "Investigate RJ delivery failures",
          "impact": 5, "effort": 3, "region": "RJ"},
@@ -1684,14 +1860,13 @@ def render_priority_matrix() -> None:
         {"id": "R5", "action": "Promise reliability, not speed",
          "impact": 4, "effort": 1, "region": "Brand"},
     ])
-
     try:
-        import plotly.express as px
+        import plotly.express as px  # type: ignore
         fig = px.scatter(
             items, x="effort", y="impact", text="id",
             size=[14] * len(items),
             color="impact",
-            color_continuous_scale=["#6EE7B7", "#FCD34D", "#FDA4AF"],
+            color_continuous_scale=["#6EE7B7", "#FCD34D", "#FCA5A5"],
             hover_data=["action", "region"],
             range_x=[0.5, 5.5], range_y=[0.5, 5.5],
         )
@@ -1705,7 +1880,7 @@ def render_priority_matrix() -> None:
         fig.add_hline(y=3.5, line_dash="dash", line_color="#CBD5E1")
         fig.add_vline(x=2.5, line_dash="dash", line_color="#CBD5E1")
         _st_plotly(fig)
-    except ImportError:
+    except Exception:
         fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
         for _, r in items.iterrows():
             c = (PALETTE.danger if r["impact"] >= 5
@@ -1723,7 +1898,6 @@ def render_priority_matrix() -> None:
         ax.set_title("Priority Matrix — Impact × Effort", loc="left")
         _style_axes(ax)
         _finish(fig)
-
     st.caption(
         "Top-left = **do first** (high impact, low effort). "
         "R2 and R5 are quick wins; R1 is the highest-ceiling project."
@@ -1731,7 +1905,7 @@ def render_priority_matrix() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §8  GLOBAL CSS  (unchanged)
+# §8  GLOBAL CSS — modern indigo/coral, best-practice typography & spacing
 # ════════════════════════════════════════════════════════════════════════════
 
 GLOBAL_CSS: Final[str] = """
@@ -1741,14 +1915,17 @@ GLOBAL_CSS: Final[str] = """
 
 <style>
   :root {
-    --brand:        #4F46E5;
+    --brand:        #6366F1;
     --brand-light:  #A5B4FC;
-    --brand-dark:   #3730A3;
+    --brand-dark:   #4338CA;
     --accent:       #F97316;
     --accent-light: #FDBA74;
     --success:      #10B981;
+    --success-dk:   #047857;
     --warn:         #F59E0B;
-    --danger:       #E11D48;
+    --warn-dk:      #B45309;
+    --danger:       #EF4444;
+    --danger-dk:    #B91C1C;
     --ink:          #0F172A;
     --ink-soft:     #1E293B;
     --slate-700:    #334155;
@@ -1761,110 +1938,122 @@ GLOBAL_CSS: Final[str] = """
     --slate-50:     #F8FAFC;
     --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
     --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
-    --fs-hero:    clamp(2.2rem, 1.8rem + 1.6vw, 3rem);
-    --fs-h1:      clamp(1.4rem, 1.1rem + 1vw,   1.9rem);
-    --fs-h2:      clamp(1.2rem, 1.05rem + 0.6vw, 1.45rem);
-    --fs-h3:      clamp(1.05rem, 1rem + 0.3vw,   1.15rem);
+    --fs-hero:    clamp(2rem, 1.7rem + 1.5vw, 2.75rem);
+    --fs-h1:      clamp(1.35rem, 1.1rem + 1vw, 1.85rem);
+    --fs-h2:      clamp(1.15rem, 1.05rem + 0.5vw, 1.4rem);
+    --fs-h3:      clamp(1rem, 0.95rem + 0.3vw, 1.15rem);
     --fs-body:    0.95rem;
-    --fs-small:   0.83rem;
+    --fs-small:   0.82rem;
     --fs-micro:   0.72rem;
+    --radius-sm:  6px;
+    --radius-md:  10px;
+    --radius-lg:  14px;
+    --radius-xl:  20px;
+    --shadow-sm:  0 1px 2px rgba(15,23,42,0.04),
+                  0 1px 3px rgba(15,23,42,0.06);
+    --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
+                  0 10px 24px rgba(15,23,42,0.06);
+    --shadow-brand: 0 4px 12px rgba(99,102,241,0.22);
   }
 
   html, body, [class*="css"], .stApp {
-    font-family: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif !important;
-    font-size: 15px; line-height: 1.6; color: var(--ink);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+    font-size: 15px;
+    line-height: 1.65;
+    color: var(--ink);
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
   .stApp { background: var(--slate-50); }
+
   h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
   .hero-label, .exec-summary-eyebrow {
     font-family: 'Sora', 'Inter', sans-serif !important;
-    letter-spacing: -0.015em;
+    letter-spacing: -0.02em;
+    color: var(--ink);
   }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
+  /* ── App hero ──────────────────────────────────────────────────── */
   .app-hero {
-    display: flex; align-items: center; gap: var(--s6);
+    display: flex;
+    align-items: center;
+    gap: var(--s6);
     background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
     border: 1px solid var(--slate-200);
-    border-radius: var(--s5);
+    border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 4px 24px rgba(79,70,229,0.08);
+    box-shadow: 0 8px 32px rgba(99,102,241,0.10);
   }
   .app-hero-logo {
-    flex-shrink: 0; width: 120px; height: auto; object-fit: contain;
+    flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
   }
   .app-hero-content { flex: 1; min-width: 0; }
   .app-hero-eyebrow {
-    font-size: 0.78rem; font-weight: 800;
+    font-size: 0.75rem; font-weight: 800;
     letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--brand); margin-bottom: var(--s3);
     font-family: 'Sora', sans-serif !important;
   }
   .app-hero-title {
-    font-size: var(--fs-hero) !important;
-    font-weight: 800 !important;
-    color: var(--ink) !important;
-    line-height: 1.08 !important;
-    margin: 0 0 var(--s3) 0 !important;
-    padding: 0 !important;
-    letter-spacing: -0.035em !important;
-    display: block;
+    font-size: var(--fs-hero) !important; font-weight: 800 !important;
+    color: var(--ink) !important; line-height: 1.1 !important;
+    margin: 0 0 var(--s3) 0 !important; padding: 0 !important;
+    letter-spacing: -0.03em !important; display: block;
   }
   .app-hero-title b {
     color: var(--brand-dark);
     background: linear-gradient(120deg, var(--brand) 0%, var(--accent) 100%);
-    -webkit-background-clip: text;
-    background-clip: text;
+    -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
   }
   @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
     .app-hero-title b {
-      color: var(--brand) !important;
-      background: none !important;
+      color: var(--brand) !important; background: none !important;
       -webkit-text-fill-color: var(--brand) !important;
     }
   }
   .app-hero-sub {
-    font-size: 1.05rem; color: var(--slate-600);
-    margin: 0 0 var(--s4) 0; line-height: 1.55;
-    max-width: 780px;
+    font-size: 1rem; color: var(--slate-600);
+    margin: 0 0 var(--s4) 0; line-height: 1.6; max-width: 760px;
   }
   .app-hero-meta {
-    display: flex; gap: var(--s3); flex-wrap: wrap; align-items: center;
+    display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
   }
 
-  .section-divider {
-    margin: var(--s6) 0 var(--s4) 0;
-    padding-top: var(--s4);
-    border-top: 1px solid var(--slate-200);
-  }
-
+  /* ── Typography scale ─────────────────────────────────────────── */
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
-       line-height: 1.2; margin-bottom: var(--s2); }
+       line-height: 1.2; margin-bottom: var(--s3); }
   h2 { color: var(--ink); font-weight: 700; font-size: var(--fs-h2);
-       line-height: 1.25; margin-top: var(--s3) !important;
+       line-height: 1.3; margin-top: var(--s5) !important;
        margin-bottom: var(--s4) !important; }
   h3 { color: var(--ink-soft); font-weight: 700; font-size: var(--fs-h3);
-       line-height: 1.3; margin-top: 0 !important;
+       line-height: 1.35; margin-top: 0 !important;
        margin-bottom: var(--s3) !important; }
   h4 { color: var(--brand); font-size: 1rem; font-weight: 700;
-       line-height: 1.35; margin-bottom: var(--s3) !important; }
+       line-height: 1.4; margin-bottom: var(--s3) !important; }
   p, li, span, label { color: var(--slate-700); font-size: var(--fs-body); }
+  .stCaption, [data-testid="stCaptionContainer"] {
+    color: var(--slate-500) !important;
+    font-size: var(--fs-small) !important;
+    line-height: 1.55;
+  }
 
+  /* ── Layout container ─────────────────────────────────────────── */
   .block-container {
     padding-top: var(--s5) !important;
     padding-bottom: var(--s8) !important;
-    max-width: 1500px;
+    max-width: 1480px;
     padding-left: var(--s5) !important;
     padding-right: var(--s5) !important;
   }
-  section[data-testid="stSidebar"] { padding-top: var(--s4); }
 
+  /* ── Sidebar ──────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0F172A 0%, #1E1B4B 100%);
     border-right: 1px solid #312E81;
+    padding-top: var(--s4);
   }
   section[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] h1,
@@ -1880,38 +2069,42 @@ GLOBAL_CSS: Final[str] = """
     letter-spacing: 0.08em;
   }
   section[data-testid="stSidebar"] hr {
-    border-color: rgba(255,255,255,0.1) !important;
+    border-color: rgba(255,255,255,0.08) !important;
+    margin: var(--s4) 0;
   }
   section[data-testid="stSidebar"] table { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] th,
   section[data-testid="stSidebar"] td {
-    color: #E2E8F0 !important; border-color: #312E81 !important;
-    font-size: 0.8rem !important; padding: var(--s2) var(--s3) !important;
+    color: #E2E8F0 !important;
+    border-color: #312E81 !important;
+    font-size: 0.78rem !important;
+    padding: 6px 10px !important;
   }
   section[data-testid="stSidebar"] .stButton > button {
     background: var(--brand) !important; color: #FFFFFF !important;
-    border-radius: var(--s2); font-weight: 600; border: none;
-    transition: background 0.15s ease;
+    border-radius: var(--radius-md); font-weight: 600;
+    border: none; padding: 8px 14px;
+    transition: background 0.15s ease, transform 0.1s ease;
   }
   section[data-testid="stSidebar"] .stButton > button:hover {
     background: var(--brand-dark) !important;
+    transform: translateY(-1px);
   }
-
   section[data-testid="stSidebar"] div[role="radiogroup"] {
     display: flex; flex-direction: column; gap: var(--s1);
     padding-top: var(--s1);
   }
   section[data-testid="stSidebar"] div[role="radiogroup"] label {
-    background: rgba(255,255,255,0.04) !important;
-    border: 1px solid rgba(165,180,252,0.18) !important;
-    border-radius: var(--s2) !important;
-    padding: var(--s2) var(--s3) !important;
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(165,180,252,0.16) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 10px 14px !important;
     transition: background 0.15s ease, border-color 0.15s ease;
     cursor: pointer;
   }
   section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-    background: rgba(165,180,252,0.14) !important;
-    border-color: rgba(165,180,252,0.4) !important;
+    background: rgba(165,180,252,0.12) !important;
+    border-color: rgba(165,180,252,0.38) !important;
   }
   section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
     display: none !important;
@@ -1919,39 +2112,39 @@ GLOBAL_CSS: Final[str] = """
   section[data-testid="stSidebar"] div[role="radiogroup"] label p {
     color: #E2E8F0 !important;
     font-weight: 600 !important;
-    font-size: 0.92rem !important;
+    font-size: 0.9rem !important;
     margin: 0 !important;
   }
   section[data-testid="stSidebar"] div[role="radiogroup"] label[data-checked="true"],
   section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
     background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%) !important;
     border-color: var(--brand-light) !important;
-    box-shadow: 0 2px 10px rgba(79,70,229,0.35);
+    box-shadow: 0 2px 12px rgba(99,102,241,0.45);
   }
   section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
-    color: #FFFFFF !important;
-    font-weight: 700 !important;
+    color: #FFFFFF !important; font-weight: 700 !important;
   }
 
+  /* Sidebar warning / headline */
   .sidebar-warning {
-    background: rgba(245, 158, 11, 0.14);
-    border: 1px solid rgba(245, 158, 11, 0.45);
+    background: rgba(245,158,11,0.14);
+    border: 1px solid rgba(245,158,11,0.42);
     border-left: 3px solid #F59E0B;
-    border-radius: var(--s2);
-    padding: var(--s3);
+    border-radius: var(--radius-md);
+    padding: 10px 12px;
     margin-top: var(--s3);
     font-size: var(--fs-small);
     line-height: 1.5;
   }
-  .sidebar-warning strong { color: #FCD34D !important; }
+  .sidebar-warning strong { color: #FCD34D !important; display: block; margin-bottom: 4px; }
   .sidebar-warning span   { color: #E2E8F0 !important; }
 
   .sidebar-headline {
-    background: rgba(79, 70, 229, 0.20);
-    border: 1px solid rgba(165, 180, 252, 0.45);
+    background: rgba(99,102,241,0.18);
+    border: 1px solid rgba(165,180,252,0.42);
     border-left: 3px solid var(--brand-light);
-    border-radius: var(--s2);
-    padding: var(--s3) var(--s4);
+    border-radius: var(--radius-md);
+    padding: 12px 14px;
     margin-top: var(--s4);
     line-height: 1.55;
   }
@@ -1962,25 +2155,26 @@ GLOBAL_CSS: Final[str] = """
   }
   .sidebar-headline strong {
     color: #FFFFFF !important; font-size: var(--fs-small); display: block;
-    margin-bottom: var(--s1);
+    margin-bottom: 4px;
   }
-  .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.75rem; }
+  .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.74rem; }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
+  /* ── Metric cards ─────────────────────────────────────────────── */
   [data-testid="stMetric"] {
-    background-color: #FFFFFF;
+    background: #FFFFFF;
     border: 1px solid var(--slate-200);
     border-left: 5px solid var(--brand);
-    border-radius: var(--s3);
+    border-radius: var(--radius-lg);
     padding: var(--s5);
-    box-shadow: 0 1px 2px rgba(15,23,42,0.04),
-                0 4px 12px rgba(15,23,42,0.04);
-    transition: transform 0.18s ease, box-shadow 0.18s ease;
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s ease, box-shadow 0.2s ease,
+                border-color 0.2s ease;
   }
   [data-testid="stMetric"]:hover {
     transform: translateY(-2px);
-    box-shadow: 0 4px 6px rgba(15,23,42,0.05),
-                0 12px 24px rgba(79,70,229,0.10);
+    box-shadow: var(--shadow-md);
+    border-left-color: var(--accent);
   }
   [data-testid="stMetricLabel"] {
     color: var(--slate-500) !important;
@@ -1993,33 +2187,41 @@ GLOBAL_CSS: Final[str] = """
     color: var(--ink) !important;
     font-weight: 800 !important;
     font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.85rem) !important;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
     line-height: 1.15;
     font-family: 'Sora', 'Inter', sans-serif !important;
     font-variant-numeric: tabular-nums;
+    margin-top: 4px;
   }
   [data-testid="stMetricDelta"] {
     font-weight: 600 !important;
     font-size: 0.78rem !important;
+    margin-top: 4px;
   }
 
+  /* ── Chart containers ─────────────────────────────────────────── */
   [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
-    border-radius: var(--s3) !important;
+    border-radius: var(--radius-lg) !important;
     padding: var(--s5) var(--s6) !important;
-    box-shadow: 0 1px 2px rgba(15,23,42,0.03),
-                0 4px 14px rgba(15,23,42,0.04);
+    box-shadow: var(--shadow-sm);
     margin-bottom: var(--s4);
+    transition: box-shadow 0.2s ease;
+  }
+  [data-testid="stVerticalBlockBorderWrapper"]:hover {
+    box-shadow: var(--shadow-md);
   }
   [data-testid="stVerticalBlockBorderWrapper"] h3 {
     margin-top: 0 !important;
+    margin-bottom: var(--s3) !important;
   }
 
+  /* ── Buttons ──────────────────────────────────────────────────── */
   .stButton > button {
     background: var(--brand); color: #FFFFFF;
-    border: none; border-radius: var(--s2);
-    padding: var(--s2) var(--s5); font-weight: 600;
+    border: none; border-radius: var(--radius-md);
+    padding: 10px 20px; font-weight: 600;
     font-size: var(--fs-body);
     transition: background 0.15s ease, transform 0.1s ease,
                 box-shadow 0.15s ease;
@@ -2027,42 +2229,48 @@ GLOBAL_CSS: Final[str] = """
   .stButton > button:hover {
     background: var(--brand-dark);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(79,70,229,0.25);
+    box-shadow: var(--shadow-brand);
   }
 
+  /* ── Alerts / expander / slider / dropdown ───────────────────── */
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
     border-left: 4px solid var(--warn);
     color: #78350F;
-    border-radius: var(--s3);
+    border-radius: var(--radius-md);
+    padding: var(--s3) var(--s4);
   }
   [data-testid="stExpander"] {
     border: 1px solid var(--slate-200);
-    border-radius: var(--s3);
+    border-radius: var(--radius-md);
     background: #FFFFFF;
     margin-bottom: var(--s3);
   }
   [data-testid="stExpander"] summary {
     font-weight: 600; color: var(--brand);
     font-family: 'Sora', sans-serif !important;
+    font-size: var(--fs-body);
+  }
+  .stSlider label {
+    font-weight: 600 !important;
+    color: var(--slate-700) !important;
+    font-size: var(--fs-small) !important;
   }
 
-  hr { border-color: var(--slate-200); margin: var(--s5) 0; }
-
+  /* ── Info cards ───────────────────────────────────────────────── */
   .info-card {
-    position: relative;
-    background: #FFFFFF;
+    position: relative; background: #FFFFFF;
     border: 1px solid var(--slate-200);
     border-left: 5px solid var(--brand);
-    border-radius: var(--s3);
+    border-radius: var(--radius-lg);
     padding: var(--s5);
     margin-bottom: var(--s4);
-    box-shadow: 0 1px 2px rgba(15,23,42,0.03);
+    box-shadow: var(--shadow-sm);
     transition: transform 0.15s ease, box-shadow 0.15s ease;
   }
   .info-card:hover {
     transform: translateY(-1px);
-    box-shadow: 0 4px 16px rgba(15,23,42,0.07);
+    box-shadow: var(--shadow-md);
   }
   .info-card.warn { border-left-color: var(--danger); }
   .info-card.ok   { border-left-color: var(--success); }
@@ -2071,58 +2279,58 @@ GLOBAL_CSS: Final[str] = """
   .info-card.ok h4   { color: var(--success); }
   .info-card.info h4 { color: var(--brand); }
   .info-card p, .info-card li {
-    color: var(--slate-700); line-height: 1.65;
+    color: var(--slate-700); line-height: 1.7;
     font-size: var(--fs-body);
   }
   .info-card .tag {
     display: inline-block; background: var(--slate-100);
     color: var(--slate-600); border-radius: 999px;
-    padding: var(--s1) var(--s3); font-size: 0.72rem;
+    padding: 4px 12px; font-size: 0.7rem;
     font-weight: 600; margin-right: var(--s2); margin-bottom: var(--s2);
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
   }
   .priority-bar {
     position: absolute; top: 0; right: 0;
     width: 5px; height: 100%;
-    border-radius: 0 var(--s3) var(--s3) 0;
+    border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
   }
   .priority-high   { background: var(--danger); }
   .priority-medium { background: var(--warn); }
   .priority-low    { background: var(--success); }
 
+  /* ── Headline / hero banners ──────────────────────────────────── */
   .hero-banner, .headline-strip {
     display: flex; align-items: center; gap: var(--s3);
-    border-radius: var(--s3);
-    padding: var(--s3) var(--s4);
+    border-radius: var(--radius-lg);
+    padding: var(--s4) var(--s5);
     margin: var(--s4) 0;
   }
   .hero-banner {
     background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 55%, #C7D2FE 100%);
     border: 1px solid #A5B4FC;
     border-left: 4px solid var(--brand);
-    box-shadow: 0 2px 10px rgba(79,70,229,0.10);
+    box-shadow: 0 2px 12px rgba(99,102,241,0.14);
   }
   .headline-strip {
     background: linear-gradient(90deg, #EEF2FF 0%, #FFFFFF 100%);
     border: 1px solid #C7D2FE;
     border-left: 4px solid var(--brand);
   }
-  .hero-banner .hero-icon,
-  .headline-strip-icon {
-    font-size: 20px; line-height: 1; flex-shrink: 0;
+  .hero-banner .hero-icon, .headline-strip-icon {
+    font-size: 22px; line-height: 1; flex-shrink: 0;
   }
-  .hero-banner .hero-text { flex: 1; min-width: 0; }
+  .hero-banner .hero-text,
   .headline-strip .headline-strip-text { flex: 1; min-width: 0; }
   .hero-banner .hero-label,
   .headline-strip .headline-strip-label {
     display: block; font-size: 0.68rem; font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--brand); margin-bottom: var(--s1);
+    color: var(--brand); margin-bottom: 4px;
   }
   .hero-banner .hero-headline,
   .headline-strip-text p {
     font-size: var(--fs-body); font-weight: 500;
-    color: var(--slate-700); line-height: 1.55;
+    color: var(--slate-700); line-height: 1.6;
     margin: 0; letter-spacing: normal;
   }
   .hero-banner .hero-headline b,
@@ -2130,81 +2338,78 @@ GLOBAL_CSS: Final[str] = """
     color: var(--brand-dark); font-weight: 700;
   }
 
+  /* ── Executive summary ───────────────────────────────────────── */
   .exec-summary {
-    display: flex; align-items: stretch; gap: var(--s4);
+    display: flex; align-items: stretch; gap: var(--s5);
     background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
     border: 1px solid var(--slate-200);
-    border-radius: var(--s3);
-    padding: var(--s5);
+    border-radius: var(--radius-lg);
+    padding: var(--s5) var(--s6);
     margin: var(--s4) 0;
-    box-shadow: 0 2px 12px rgba(79,70,229,0.06);
+    box-shadow: 0 4px 16px rgba(99,102,241,0.08);
   }
   .exec-summary-main { flex: 1; min-width: 0; }
   .exec-summary-eyebrow {
-    font-size: 0.68rem; font-weight: 800;
+    font-size: 0.7rem; font-weight: 800;
     letter-spacing: 0.16em; color: var(--brand);
     margin-bottom: var(--s2);
   }
   .exec-summary-title {
     font-size: var(--fs-h2); font-weight: 800;
-    color: var(--ink); line-height: 1.25;
-    margin-bottom: var(--s2);
+    color: var(--ink); line-height: 1.3;
+    margin-bottom: var(--s3);
   }
   .exec-summary-title b { color: var(--brand-dark); }
   .exec-summary-detail {
     color: var(--slate-600); font-size: var(--fs-body);
-    line-height: 1.6;
+    line-height: 1.65;
   }
   .exec-summary-badge {
     display: flex; flex-direction: column; justify-content: center;
     align-items: center; text-align: center;
-    min-width: 130px; padding: var(--s3) var(--s4);
-    border: 2px solid; border-radius: var(--s3);
+    min-width: 140px; padding: var(--s4) var(--s5);
+    border: 2px solid; border-radius: var(--radius-lg);
+    flex-shrink: 0;
   }
   .exec-summary-badge-label {
     font-size: 0.65rem; font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
-    opacity: 0.85; margin-bottom: var(--s2);
-    color: inherit;
+    opacity: 0.85; margin-bottom: var(--s2); color: inherit;
   }
   .exec-summary-badge-value {
     font-family: 'Sora', sans-serif; font-weight: 800;
-    font-size: 1rem; line-height: 1.2; color: inherit;
+    font-size: 1.05rem; line-height: 1.2; color: inherit;
   }
 
+  /* ── Overview banner ─────────────────────────────────────────── */
   .overview-banner {
-    background: #FEF3C7;
-    border-left: 4px solid var(--warn);
-    border-radius: var(--s3);
-    padding: var(--s3) var(--s5);
+    background: #FEF3C7; border-left: 4px solid var(--warn);
+    border-radius: var(--radius-lg); padding: var(--s4) var(--s5);
     margin-bottom: var(--s4);
-    font-size: var(--fs-body); color: #78350F; line-height: 1.55;
+    font-size: var(--fs-body); color: #78350F; line-height: 1.6;
   }
   .overview-banner b { color: #92400E; }
 
+  /* ── Pills ───────────────────────────────────────────────────── */
   .scope-pill {
     display: inline-block;
     background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
     color: #FFFFFF; border-radius: 999px;
-    padding: var(--s2) var(--s4);
-    font-size: var(--fs-small); font-weight: 600;
-    box-shadow: 0 2px 10px rgba(79,70,229,0.30);
+    padding: 6px 14px; font-size: var(--fs-small); font-weight: 600;
+    box-shadow: 0 2px 10px rgba(99,102,241,0.28);
   }
   .scope-pill-subtle {
-    display: inline-block;
-    background: var(--slate-100);
-    color: var(--slate-700);
-    border: 1px solid var(--slate-200);
-    border-radius: 999px;
-    padding: var(--s2) var(--s4);
+    display: inline-block; background: var(--slate-100);
+    color: var(--slate-700); border: 1px solid var(--slate-200);
+    border-radius: 999px; padding: 6px 14px;
     font-size: var(--fs-small); font-weight: 600;
   }
 
+  /* ── Insight card ─────────────────────────────────────────────── */
   .insight {
     display: flex; gap: var(--s3); align-items: flex-start;
-    background: #F5F3FF;
-    border-left: 3px solid var(--brand-light);
-    border-radius: var(--s2);
+    background: #F5F3FF; border-left: 3px solid var(--brand-light);
+    border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin-top: var(--s3);
     font-size: var(--fs-small);
@@ -2212,51 +2417,47 @@ GLOBAL_CSS: Final[str] = """
   .insight-chip {
     flex-shrink: 0;
     background: var(--brand); color: #FFFFFF;
-    padding: 2px 10px; border-radius: 999px;
-    font-size: 0.7rem; font-weight: 700;
-    white-space: nowrap;
+    padding: 3px 10px; border-radius: 999px;
+    font-size: 0.68rem; font-weight: 700; white-space: nowrap;
   }
   .insight-body { display: flex; flex-direction: column; gap: 2px; }
   .insight-scope {
-    font-size: 0.68rem; font-weight: 700; color: var(--brand);
-    text-transform: uppercase; letter-spacing: 0.06em;
-    opacity: 0.9;
+    font-size: 0.66rem; font-weight: 700; color: var(--brand);
+    text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.9;
   }
-  .insight-text { color: var(--slate-600); line-height: 1.55; }
+  .insight-text { color: var(--slate-600); line-height: 1.6; }
   .insight-text b { color: var(--ink); font-weight: 700; }
 
+  /* ── Verdict card ─────────────────────────────────────────────── */
   .verdict-card {
-    display: flex; flex-direction: column; gap: var(--s1);
+    display: flex; flex-direction: column; gap: 4px;
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
-    border: 1px solid #6EE7B7;
-    border-left: 4px solid var(--success);
-    border-radius: var(--s2);
+    border: 1px solid #6EE7B7; border-left: 4px solid var(--success);
+    border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin: var(--s3) 0;
   }
   .verdict-label {
-    font-size: 0.7rem; font-weight: 800;
+    font-size: 0.68rem; font-weight: 800;
     letter-spacing: 0.1em; text-transform: uppercase;
-    color: var(--success);
+    color: var(--success-dk);
   }
   .verdict-text {
-    font-size: var(--fs-small); color: var(--slate-700);
-    line-height: 1.55;
+    font-size: var(--fs-small); color: var(--slate-700); line-height: 1.6;
   }
   .verdict-text b { color: var(--ink); }
 
+  /* ── Empty state ─────────────────────────────────────────────── */
   .empty-state {
-    text-align: center;
-    padding: var(--s8) var(--s5);
+    text-align: center; padding: var(--s7) var(--s5);
     background: var(--slate-50);
     border: 1px dashed var(--slate-300);
-    border-radius: var(--s3);
+    border-radius: var(--radius-lg);
   }
   .empty-icon { font-size: 40px; }
   .empty-title {
-    font-size: 1.15rem; font-weight: 700;
-    color: var(--slate-700); margin: var(--s2) 0;
-    font-family: 'Sora', sans-serif;
+    font-size: 1.1rem; font-weight: 700; color: var(--slate-700);
+    margin: var(--s2) 0; font-family: 'Sora', sans-serif;
   }
   .empty-body { color: var(--slate-500); font-size: var(--fs-body); }
   .empty-hint {
@@ -2264,27 +2465,28 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small); font-weight: 500;
   }
 
+  /* ── Dataframe ───────────────────────────────────────────────── */
   [data-testid="stDataFrame"] {
-    border-radius: var(--s3); overflow: hidden;
+    border-radius: var(--radius-md); overflow: hidden;
     border: 1px solid var(--slate-200);
   }
   .stPyplot { margin-top: var(--s1); }
-  .stCaption, [data-testid="stCaptionContainer"] {
-    color: var(--slate-500); font-size: var(--fs-small);
-  }
 
+  hr { border-color: var(--slate-200); margin: var(--s5) 0; }
+
+  /* ── Responsive ──────────────────────────────────────────────── */
   @media (max-width: 1100px) {
-    .app-hero { flex-direction: column; align-items: flex-start; padding: var(--s5); gap: var(--s4); }
-    .app-hero-logo { width: 90px; }
+    .app-hero { flex-direction: column; align-items: flex-start;
+                padding: var(--s5); gap: var(--s4); }
+    .app-hero-logo { width: 84px; }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
     [data-testid="stMetric"] { padding: var(--s4); }
   }
-
   @media (max-width: 768px) {
-    .block-container { padding: var(--s4) !important; }
+    .block-container { padding: var(--s3) !important; }
     .app-hero { padding: var(--s5) var(--s4); }
-    .app-hero-title { font-size: 1.8rem !important; }
+    .app-hero-title { font-size: 1.75rem !important; }
     .hero-banner, .headline-strip {
       flex-direction: column; align-items: flex-start;
     }
@@ -2297,34 +2499,37 @@ GLOBAL_CSS: Final[str] = """
 
 def _apply_global_style() -> None:
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-    mpl.rcParams.update({
-        "figure.facecolor":   "#FFFFFF",
-        "axes.facecolor":     "#FFFFFF",
-        "axes.grid":          False,
-        "grid.color":         "#E2E8F0",
-        "grid.linewidth":     0.8,
-        "axes.spines.top":    False,
-        "axes.spines.right":  False,
-        "axes.spines.left":   False,
-        "axes.spines.bottom": True,
-        "axes.edgecolor":     "#CBD5E1",
-        "axes.linewidth":     0.9,
-        "font.family":        "sans-serif",
-        "font.size":          11,
-        "axes.titlesize":     14,
-        "axes.titleweight":   "bold",
-        "axes.titlecolor":    "#0F172A",
-        "axes.titlelocation": "left",
-        "axes.labelsize":     11,
-        "axes.labelcolor":    "#475569",
-        "xtick.color":        "#64748B",
-        "ytick.color":        "#64748B",
-        "xtick.labelsize":    10,
-        "ytick.labelsize":    10,
-        "legend.frameon":     False,
-        "legend.fontsize":    10,
-        "figure.autolayout":  False,
-    })
+    try:
+        mpl.rcParams.update({
+            "figure.facecolor":   "#FFFFFF",
+            "axes.facecolor":     "#FFFFFF",
+            "axes.grid":          False,
+            "grid.color":         "#E2E8F0",
+            "grid.linewidth":     0.8,
+            "axes.spines.top":    False,
+            "axes.spines.right":  False,
+            "axes.spines.left":   False,
+            "axes.spines.bottom": True,
+            "axes.edgecolor":     "#CBD5E1",
+            "axes.linewidth":     0.9,
+            "font.family":        "sans-serif",
+            "font.size":          11,
+            "axes.titlesize":     14,
+            "axes.titleweight":   "bold",
+            "axes.titlecolor":    "#0F172A",
+            "axes.titlelocation": "left",
+            "axes.labelsize":     11,
+            "axes.labelcolor":    "#475569",
+            "xtick.color":        "#64748B",
+            "ytick.color":        "#64748B",
+            "xtick.labelsize":    10,
+            "ytick.labelsize":    10,
+            "legend.frameon":     False,
+            "legend.fontsize":    10,
+            "figure.autolayout":  False,
+        })
+    except Exception as exc:
+        _LOGGER.warning("matplotlib rcParams update failed: %s", exc)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2353,7 +2558,6 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
     )
 
     st.sidebar.divider()
-
     st.sidebar.subheader("🎛️ Filters")
     st.sidebar.caption(
         "Both filters apply to **every KPI and chart**. "
@@ -2364,9 +2568,13 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
         st.session_state["filter_year"] = "All"
         st.session_state["filter_states"] = []
 
-    year = st.sidebar.selectbox(
-        "Reporting Year", CONFIG.years, index=0, key="filter_year",
-    )
+    try:
+        year = st.sidebar.selectbox(
+            "Reporting Year", CONFIG.years, index=0, key="filter_year",
+        )
+    except Exception:
+        year = "All"
+
     if is_partial_year(year):
         st.sidebar.markdown(
             f"""
@@ -2378,25 +2586,36 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
             unsafe_allow_html=True,
         )
 
-    states = st.sidebar.multiselect(
-        "State",
-        options=CONFIG.all_states,
-        default=[],
-        placeholder="All states",
-        help="Pick one or more states. Leaving empty shows all states.",
-        key="filter_states",
-    )
-    states_tuple = tuple(states)
+    try:
+        states = st.sidebar.multiselect(
+            "State",
+            options=CONFIG.all_states,
+            default=[],
+            placeholder="All states",
+            help="Pick one or more states. Leaving empty shows all states.",
+            key="filter_states",
+        ) or []
+    except Exception:
+        states = []
 
-    if states or year != "All":
-        st.sidebar.button(
-            "↺  Reset filters",
-            on_click=_reset_filters,
-            use_container_width=True,
-        )
+    states_tuple = tuple(s for s in states if isinstance(s, str))
+
+    if states_tuple or year != "All":
+        try:
+            st.sidebar.button(
+                "↺  Reset filters",
+                on_click=_reset_filters,
+                use_container_width=True,
+            )
+        except TypeError:
+            st.sidebar.button("↺  Reset filters", on_click=_reset_filters)
 
     st.sidebar.divider()
-    render_headline_sidebar(year, states_tuple)
+    try:
+        render_headline_sidebar(year, states_tuple)
+    except Exception as exc:
+        _LOGGER.warning("Headline sidebar failed: %s", exc)
+
     st.sidebar.divider()
     st.sidebar.markdown("**📊 Reference — filters = All**")
     st.sidebar.markdown(
@@ -2414,7 +2633,7 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §10  VIEW — Overview
+# §10  OVERVIEW
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_overview(year: str, states: tuple[str, ...],
@@ -2430,26 +2649,29 @@ def render_overview(year: str, states: tuple[str, ...],
             "2016": "2016 contains only September, October and December — "
                     "November 2016 has zero orders.",
             "2018": "2018 ends on 17 October — it is not a full calendar year.",
-        }[year]
-        st.markdown(
-            f"""
-            <div class="overview-banner">
-              <b>⚠️ Partial year — {year}.</b> {detail}
-              Year-over-year comparisons against a full year are misleading.
-              Set the Year filter to <b>All</b> or <b>2017</b>.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        }.get(year, "")
+        if detail:
+            st.markdown(
+                f"""
+                <div class="overview-banner">
+                  <b>⚠️ Partial year — {year}.</b> {detail}
+                  Year-over-year comparisons against a full year are misleading.
+                  Set the Year filter to <b>All</b> or <b>2017</b>.
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
     k = query_kpis(year, states)
     c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
-    c2.metric("Delivered Orders", fmt_int(k["delivered_orders"]),
-              delta=(fmt_pct(k["delivered_pct"], 1)
-                     if k["delivered_pct"] is not None else None),
-              delta_color="off")
-
+    c2.metric(
+        "Delivered Orders",
+        fmt_int(k["delivered_orders"]),
+        delta=(fmt_pct(k["delivered_pct"], 1)
+               if k["delivered_pct"] is not None else None),
+        delta_color="off",
+    )
     if k["avg_review_score"] is None:
         c3.metric("Avg Review Score", "—")
     else:
@@ -2459,13 +2681,11 @@ def render_overview(year: str, states: tuple[str, ...],
         )
         c3.metric("Avg Review Score", fmt_float(k["avg_review_score"]),
                   delta=delta)
-
-    late_val = k["late_deliveries"]
     late_delta = (
         f"{k['late_pct']:.1f}% of delivered"
         if k["late_pct"] is not None else None
     )
-    c4.metric("Late Deliveries", fmt_int(late_val),
+    c4.metric("Late Deliveries", fmt_int(k["late_deliveries"]),
               delta=late_delta, delta_color="inverse")
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
@@ -2482,32 +2702,38 @@ def render_overview(year: str, states: tuple[str, ...],
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §11  VIEW — Customer Satisfaction
+# §11  CUSTOMER SATISFACTION
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## ⭐ Customer Satisfaction")
 
-    render_headline_hero(year, states)
-    render_decision_snapshot(year, states)
+    try:
+        render_headline_hero(year, states)
+    except Exception as exc:
+        _LOGGER.warning("Headline hero failed: %s", exc)
+
+    try:
+        render_decision_snapshot(year, states)
+    except Exception as exc:
+        _LOGGER.warning("Decision snapshot failed: %s", exc)
 
     st.divider()
 
     _chart_card(chart_punctuality_vs_satisfaction, year, states)
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
-    col_a, col_b = st.columns(2, gap="medium")
-    with col_a:
-        _chart_card(chart_state_scores, year, states)
-    with col_b:
-        _chart_card(chart_ontime_by_state, year, states)
+    # Geographic view — Q4 → Q12 → Q5 (stacked)
+    _chart_card(chart_state_scores, year, states)             # Q4
+    _chart_card(chart_lowest_scoring_states, year, states)    # Q12
+    _chart_card(chart_ontime_by_state, year, states)          # Q5
 
     _chart_card(chart_monthly_score, year, states)
     _chart_card(chart_brazil_map, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §12  VIEW — Detail & Method
+# §12  DETAIL & METHOD
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_detail(year: str, states: tuple[str, ...]) -> None:
@@ -2518,7 +2744,6 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     )
 
     st.markdown("### Limitations")
-
     info_card(
         "L1 — Association, not causation",
         """<p>The on-time vs late star gap is a strong <i>association</i>,
@@ -2560,13 +2785,15 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     )
     info_card(
         "L5 — Delivered ≠ delivered-with-a-date",
-        """<p><b>Q1</b> reports 96,478 delivered orders (any status='delivered'
-        row), but <b>Q5</b>, <b>Q6</b> and <b>Q9</b> add a
+        """<p><b>Q1</b> reports 96,478 delivered orders (any
+        <code>status='delivered'</code> row), but <b>Q5</b>, <b>Q6</b>
+        and <b>Q9</b> add an
         <code>order_delivered_customer_date IS NOT NULL</code> guard that
-        shrinks the base to <b>95,832</b> delivered orders and <b>7,661</b>
-        late ones. Q1's "late = 7,826" therefore includes <b>165</b> late
-        orders with a NULL delivered date. Both numbers are correct for
-        their queries; the app labels which is which.</p>""",
+        shrinks the base to <b>95,832</b> delivered orders and
+        <b>7,661</b> late ones. Q1's "late = 7,826" therefore includes
+        <b>165</b> late orders with a NULL delivered date. Both numbers
+        are correct for their queries; the app labels which is
+        which.</p>""",
         variant="info", tags=["Q1 vs Q5/Q6", "NULL semantics"],
     )
     info_card(
@@ -2604,76 +2831,89 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         <b>Q7</b> = <code>7,826 · 9.55 · 189</code>.
         <b>Q10</b> = <code>99,224 / 98,673 / 551</code>.
         <b>Q11</b> = <code>99,441 / 96,096</code>.
+        <b>Q12</b> = BA <code>3.86</code> (3,340) · RJ <code>3.87</code>
+        (12,687) · ES <code>4.04</code> (2,006) · GO <code>4.04</code>
+        (2,007) · DF <code>4.06</code> (2,128) · SC <code>4.07</code>
+        (3,609) · RS <code>4.13</code> (5,443) · MG <code>4.14</code>
+        (11,554) · SP <code>4.17</code> (41,472) · PR <code>4.18</code>
+        (5,019).
         All verified in the current code; see the <i>Whole-dataset
         diagnostics</i> table below.</p>""",
         variant="ok", tags=["Reconciliation", "KPI contract"],
     )
 
     st.divider()
-    st.markdown("### Whole-dataset diagnostics  (Q7, Q10, Q11)")
+    st.markdown("### Whole-dataset diagnostics (Q7, Q10, Q11)")
     st.caption(
         "Counts computed across the entire dataset — these do not respond "
         "to the filters because they describe the source data itself."
     )
 
-    frames = load_data()
-    reviews = frames["reviews"]
-    customers = frames["customers"]
+    try:
+        frames = load_data()
+        reviews = frames["reviews"]
+        customers = frames["customers"]
 
-    review_rows = len(reviews)
-    distinct_orders = reviews["order_id"].nunique()
-    duplicate_rows = review_rows - distinct_orders
-    duplicate_pct = (
-        100.0 * duplicate_rows / review_rows if review_rows else 0.0
-    )
-    customer_rows = len(customers)
-    unique_customers = customers["customer_unique_id"].nunique()
-    unique_pct = (
-        100.0 * unique_customers / customer_rows if customer_rows else 0.0
-    )
+        review_rows = len(reviews)
+        distinct_orders = reviews["order_id"].nunique()
+        duplicate_rows = review_rows - distinct_orders
+        duplicate_pct = (100.0 * _safe_div(duplicate_rows, review_rows)
+                         if _safe_div(duplicate_rows, review_rows) is not None
+                         else 0.0)
+        customer_rows = len(customers)
+        unique_customers = customers["customer_unique_id"].nunique()
+        unique_pct = (100.0 * _safe_div(unique_customers, customer_rows)
+                      if _safe_div(unique_customers, customer_rows) is not None
+                      else 0.0)
 
-    c1, c2 = st.columns(2, gap="medium")
-    with c1:
-        st.markdown("**Reviews fan-out (Q10)**")
-        _st_dataframe(pd.DataFrame([{
-            "review_rows": review_rows,
-            "distinct_orders": distinct_orders,
-            "duplicate_rows": duplicate_rows,
-            "duplicate_pct": f"{duplicate_pct:.2f}%",
-        }]))
-    with c2:
-        st.markdown("**Customer identity (Q11)**")
-        _st_dataframe(pd.DataFrame([{
-            "customer_rows": customer_rows,
-            "unique_customers": unique_customers,
-            "unique_pct": f"{unique_pct:.2f}%",
-        }]))
+        c1, c2 = st.columns(2, gap="medium")
+        with c1:
+            st.markdown("**Reviews fan-out (Q10)**")
+            _st_dataframe(pd.DataFrame([{
+                "review_rows": review_rows,
+                "distinct_orders": distinct_orders,
+                "duplicate_rows": duplicate_rows,
+                "duplicate_pct": f"{duplicate_pct:.2f}%",
+            }]))
+        with c2:
+            st.markdown("**Customer identity (Q11)**")
+            _st_dataframe(pd.DataFrame([{
+                "customer_rows": customer_rows,
+                "unique_customers": unique_customers,
+                "unique_pct": f"{unique_pct:.2f}%",
+            }]))
+    except Exception as exc:
+        _LOGGER.warning("Diagnostics block failed: %s", exc)
+        st.caption("Diagnostics unavailable for the current dataset.")
 
-    # Q7 — days-late diagnostic (whole dataset)
-    model = get_model()
-    late = model[model["is_late"]]
-    if not late.empty:
-        dl = late["days_late"]
-        all_delivered = int(model["is_delivered"].sum())
-        late_share = (
-            100.0 * len(late) / all_delivered if all_delivered else 0.0
-        )
-        st.markdown("**Days late when late (Q7, whole dataset)**")
-        _st_dataframe(pd.DataFrame([{
-            "late_orders": len(late),
-            "late_share_of_delivered": f"{late_share:.1f}%",
-            "avg_days_late": round(float(dl.mean()), 2),
-            "worst_days_late": round(float(dl.max()), 2),
-        }]))
-        st.caption(
-            f"When late, orders run **{dl.mean():.2f} days past estimate** "
-            f"on average; the worst case is **{dl.max():.1f} days**. "
-            f"Late orders are **{late_share:.1f}%** of all delivered orders."
-        )
+    try:
+        model = get_model()
+        late = model[model["is_late"]]
+        if not late.empty:
+            dl = late["days_late"]
+            all_delivered = int(model["is_delivered"].sum())
+            late_share = (100.0 * _safe_div(len(late), all_delivered)
+                          if _safe_div(len(late), all_delivered) is not None
+                          else 0.0)
+            st.markdown("**Days late when late (Q7, whole dataset)**")
+            _st_dataframe(pd.DataFrame([{
+                "late_orders": len(late),
+                "late_share_of_delivered": f"{late_share:.1f}%",
+                "avg_days_late": round(float(dl.mean()), 2),
+                "worst_days_late": round(float(dl.max()), 2),
+            }]))
+            st.caption(
+                f"When late, orders run **{dl.mean():.2f} days past "
+                f"estimate** on average; the worst case is "
+                f"**{dl.max():.1f} days**. Late orders are "
+                f"**{late_share:.1f}%** of all delivered orders."
+            )
+    except Exception as exc:
+        _LOGGER.warning("Late diagnostics failed: %s", exc)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §13  VIEW — Recommendations
+# §13  RECOMMENDATIONS
 # ════════════════════════════════════════════════════════════════════════════
 
 def render_recommendations() -> None:
@@ -2685,7 +2925,10 @@ def render_recommendations() -> None:
         "because someone narrowed the view."
     )
 
-    render_priority_matrix()
+    try:
+        render_priority_matrix()
+    except Exception as exc:
+        _LOGGER.warning("Priority matrix failed: %s", exc)
 
     st.divider()
     st.markdown("### Prioritised recommendations")
@@ -2698,7 +2941,7 @@ def render_recommendations() -> None:
         "🔴 R1 — Investigate RJ delivery failures (highest ROI)",
         """<p><b>Evidence.</b> RJ carries 12,687 orders at a 13.5% late
         rate — <b>2.3×</b> the 5.9% national average. RJ's average score
-        (3.88) sits 0.29 stars (≈7%) below PR (4.18).</p>
+        (3.87) sits 0.31 stars (≈7%) below PR (4.18).</p>
         <p><b>Action.</b> Audit RJ carriers, warehouse locations,
         last-mile routes and hand-off delays. Run a controlled pilot
         before scaling.</p>
@@ -2801,18 +3044,35 @@ def main() -> None:
             "the folder with the CSVs (or place them in `./data`)."
         )
         st.stop()
+    except Exception as exc:
+        _LOGGER.exception("Unexpected load error")
+        st.error(f"❌ **Unexpected load error.** {exc}")
+        st.stop()
 
-    active_tab, year, states = render_sidebar()
-    k_live = query_kpis(year, states)
+    try:
+        active_tab, year, states = render_sidebar()
+    except Exception as exc:
+        _LOGGER.exception("Sidebar failed")
+        st.warning(f"⚠️ Sidebar could not render: {exc}")
+        active_tab, year, states = NAV_TABS[0], "All", ()
+
+    try:
+        k_live = query_kpis(year, states)
+    except Exception as exc:
+        _LOGGER.exception("KPIs failed")
+        st.warning(f"⚠️ KPIs could not compute: {exc}")
+        k_live = {"total_orders": 0, "avg_review_score": None,
+                  "late_pct": None}
 
     logo_src = _get_logo_base64()
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
-        if k_live["avg_review_score"] else f"{REF['avg_review_score']:.2f}★"
+        if k_live.get("avg_review_score") is not None
+        else f"{REF['avg_review_score']:.2f}★"
     )
     late_pill = (
         f"🚚 {k_live['late_pct']:.1f}% late"
-        if k_live["late_pct"] is not None else "🚚 late = ?"
+        if k_live.get("late_pct") is not None else "🚚 late = ?"
     )
     st.markdown(
         f"""
@@ -2832,7 +3092,7 @@ def main() -> None:
             </p>
             <div class="app-hero-meta">
               <span class="scope-pill">Scope: {scope_label(year, states)}</span>
-              <span class="scope-pill-subtle">📦 {k_live['total_orders']:,} orders</span>
+              <span class="scope-pill-subtle">📦 {k_live.get('total_orders', 0):,} orders</span>
               <span class="scope-pill-subtle">⭐ {avg_live} avg</span>
               <span class="scope-pill-subtle">{late_pill}</span>
             </div>
@@ -2842,20 +3102,26 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    render_executive_summary(year, states)
+    try:
+        render_executive_summary(year, states)
+    except Exception as exc:
+        _LOGGER.warning("Exec summary failed: %s", exc)
 
     st.write("")
-
     filter_active = year != "All" or bool(states)
 
-    if active_tab == NAV_TABS[0]:
-        render_overview(year, states, filter_active=filter_active)
-    elif active_tab == NAV_TABS[1]:
-        render_theme(year, states)
-    elif active_tab == NAV_TABS[2]:
-        render_detail(year, states)
-    else:
-        render_recommendations()
+    try:
+        if active_tab == NAV_TABS[0]:
+            render_overview(year, states, filter_active=filter_active)
+        elif active_tab == NAV_TABS[1]:
+            render_theme(year, states)
+        elif active_tab == NAV_TABS[2]:
+            render_detail(year, states)
+        else:
+            render_recommendations()
+    except Exception as exc:
+        _LOGGER.exception("Main tab render failed")
+        st.warning(f"⚠️ This tab could not render: {exc}")
 
     st.divider()
     st.caption(
@@ -2868,8 +3134,9 @@ def main() -> None:
         f"delivered) · Avg Delivery Days {REF['avg_delivery_days']:.2f} · "
         f"Headline gap {REF['star_gap']:.2f}★ "
         f"({100.0*REF['star_gap']/REF['on_time_score']:.1f}%) — "
-        f"Q6: on-time {REF['on_time_score']:.2f} (n={REF['q6_on_time_orders']:,}) "
-        f"vs late {REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
+        f"Q6: on-time {REF['on_time_score']:.2f} "
+        f"(n={REF['q6_on_time_orders']:,}) vs late "
+        f"{REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
         "Every KPI, chart and insight line responds to the Year and State "
         "filters and reconciles to the verified SQL reference when both "
         "are set to All."
