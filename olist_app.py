@@ -74,9 +74,9 @@ REF: Final[dict[str, Any]] = {
 @dataclass(frozen=True)
 class Palette:
     # Brand
-    primary:       str = "#6366F1"   # Indigo 500
-    primary_light: str = "#A5B4FC"
-    primary_dark:  str = "#4338CA"
+    primary:       str = "#0F766E"   # Teal 700
+    primary_light: str = "#99F6E4"
+    primary_dark:  str = "#115E59"
     accent:        str = "#F97316"   # Orange 500
     accent_light:  str = "#FDBA74"
     accent_dark:   str = "#C2410C"
@@ -327,6 +327,16 @@ def load_data() -> dict[str, pd.DataFrame]:
                 f"Table {table!r} missing required columns: {missing}"
             )
 
+    # Fail early on malformed review scores rather than silently charting them.
+    review_scores = pd.to_numeric(frames["reviews"]["review_score"], errors="coerce")
+    invalid_scores = review_scores.notna() & ~review_scores.between(1, 5)
+    if invalid_scores.any():
+        _LOGGER.warning(
+            "Found %d review score value(s) outside the expected 1–5 range; "
+            "they will be excluded from score-based summaries.",
+            int(invalid_scores.sum()),
+        )
+
     _LOGGER.info(
         "Data loaded: %d tables, %d rows",
         len(frames), sum(len(df) for df in frames.values()),
@@ -391,9 +401,18 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
 def get_model() -> pd.DataFrame:
     frames = load_data()
-    fingerprint = hashlib.md5(
-        "|".join(f"{k}:{len(v)}" for k, v in sorted(frames.items())).encode()
-    ).hexdigest()
+    # Include file size + nanosecond mtime so replacing a CSV with the same
+    # number of rows invalidates the cached model. The cache key remains cheap.
+    data_dir = _data_dir()
+    signatures = []
+    for table, filename in sorted(CONFIG.tables.items()):
+        path = os.path.join(data_dir, filename)
+        try:
+            stat = os.stat(path)
+            signatures.append(f"{table}:{stat.st_size}:{stat.st_mtime_ns}")
+        except OSError:
+            signatures.append(f"{table}:missing")
+    fingerprint = hashlib.sha256("|".join(signatures).encode("utf-8")).hexdigest()
     return build_model(fingerprint)
 
 
@@ -727,10 +746,12 @@ def chart_review_distribution() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _late_severity(days_late: pd.Series) -> pd.Series:
+    """Bucket delivery lateness in days; any positive fraction counts as late."""
     out = pd.Series("On Time", index=days_late.index, dtype="object")
-    out = out.mask(days_late.between(1, 3), "Slightly Late")
-    out = out.mask(days_late.between(4, 7), "Moderately Late")
-    out = out.mask(days_late >= 8, "Severely Late")
+    late = days_late > 0
+    out = out.mask(late & days_late.le(3), "Slightly Late")
+    out = out.mask(days_late.gt(3) & days_late.le(7), "Moderately Late")
+    out = out.mask(days_late.gt(7), "Severely Late")
     return out
 
 
@@ -1869,9 +1890,9 @@ GLOBAL_CSS: Final[str] = """
 
 <style>
   :root {
-    --brand:        #6366F1;
-    --brand-light:  #A5B4FC;
-    --brand-dark:   #4338CA;
+    --brand:        #0F766E;
+    --brand-light:  #99F6E4;
+    --brand-dark:   #115E59;
     --accent:       #F97316;
     --accent-light: #FDBA74;
     --success:      #10B981;
@@ -1907,7 +1928,7 @@ GLOBAL_CSS: Final[str] = """
                   0 1px 3px rgba(15,23,42,0.06);
     --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
                   0 10px 24px rgba(15,23,42,0.06);
-    --shadow-brand: 0 4px 12px rgba(99,102,241,0.22);
+    --shadow-brand: 0 4px 12px rgba(15,118,110,0.20);
   }
 
   html, body, [class*="css"], .stApp {
@@ -1932,12 +1953,12 @@ GLOBAL_CSS: Final[str] = """
     display: flex;
     align-items: center;
     gap: var(--s6);
-    background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
+    background: linear-gradient(135deg, #E6FFFB 0%, #FFFFFF 58%, #EFF6FF 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 8px 32px rgba(99,102,241,0.10);
+    box-shadow: 0 8px 32px rgba(15,118,110,0.10);
   }
   .app-hero-logo {
     flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
@@ -2434,6 +2455,61 @@ GLOBAL_CSS: Final[str] = """
 
 def _apply_global_style() -> None:
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
+    # Small, centralized overrides: consistent spacing, readable typography,
+    # visible keyboard focus, and responsive controls across Streamlit versions.
+    st.markdown(
+        """
+        <style>
+          :root {
+            --brand: #0F766E !important;
+            --brand-light: #99F6E4 !important;
+            --brand-dark: #115E59 !important;
+            --shadow-brand: 0 4px 12px rgba(15,118,110,.20) !important;
+          }
+          .block-container {
+            max-width: 1600px;
+            padding-top: 1.75rem !important;
+            padding-bottom: 2.5rem !important;
+            padding-left: clamp(1rem, 2.5vw, 2.5rem) !important;
+            padding-right: clamp(1rem, 2.5vw, 2.5rem) !important;
+          }
+          [data-testid="stMetric"] {
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 14px;
+            padding: 1rem 1.1rem;
+            box-shadow: 0 2px 8px rgba(15,23,42,.035);
+          }
+          [data-testid="stMetricLabel"] p {font-size: .86rem !important; font-weight: 600;}
+          [data-testid="stMetricValue"] {font-size: clamp(1.35rem, 1.1rem + .7vw, 2rem) !important;}
+          [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {min-width: 0;}
+          div[data-testid="stButton"] > button,
+          div[data-testid="stDownloadButton"] > button {
+            border-radius: 10px; font-weight: 650; min-height: 2.65rem;
+            transition: transform .12s ease, box-shadow .12s ease;
+          }
+          div[data-testid="stButton"] > button:hover,
+          div[data-testid="stDownloadButton"] > button:hover {
+            transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15,118,110,.15);
+          }
+          button:focus-visible, input:focus-visible, textarea:focus-visible {
+            outline: 3px solid #0F766E !important; outline-offset: 2px !important;
+          }
+          [data-testid="stSidebar"] {border-right: 1px solid #E2E8F0;}
+          [data-testid="stSidebar"] .block-container {padding-top: 1.5rem !important;}
+          [data-testid="stDataFrame"] {max-width: 100%;}
+          @media (max-width: 768px) {
+            .block-container {padding-top: 1rem !important;}
+            [data-testid="stMetric"] {padding: .8rem;}
+            [data-testid="stMetricValue"] {font-size: 1.35rem !important;}
+          }
+          @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {transition-duration: .01ms !important; animation-duration: .01ms !important;}
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
     try:
         mpl.rcParams.update({
             "figure.facecolor":   "#FFFFFF",
@@ -2997,7 +3073,16 @@ def main() -> None:
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
         if k_live.get("avg_review_score") is not None
-        else f"{REF['avg_review_score']:.2f}★"
+        else "—"
+    )
+    gap_live = query_headline_gap(year, states)
+    gap_live_text = (
+        f"{gap_live['gap']:.2f}★"
+        if gap_live.get("gap") is not None else "not available for this selection"
+    )
+    gap_live_pct = (
+        f"{gap_live['gap_pct']:.1f}%"
+        if gap_live.get("gap_pct") is not None else "—"
     )
     late_pill = (
         f"🚚 {k_live['late_pct']:.1f}% late"
@@ -3014,10 +3099,9 @@ def main() -> None:
             </div>
             <p class="app-hero-sub">
               A decision-first view of 99,000+ Olist orders.
-              Delivery punctuality is the strongest satisfaction driver —
-              late orders lose <b>{REF['star_gap']:.2f}★</b>
-              (<b>{100.0*REF['star_gap']/REF['on_time_score']:.1f}%</b>)
-              on average.
+              Delivery punctuality is a key satisfaction signal —
+              late orders trail on-time orders by <b>{gap_live_text}</b>
+              (<b>{gap_live_pct}</b>) in the current selection.
             </p>
             <div class="app-hero-meta">
               <span class="scope-pill">Scope: {scope_label(year, states)}</span>
