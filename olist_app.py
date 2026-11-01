@@ -713,7 +713,7 @@ def chart_review_distribution() -> None:
         f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ and <b>{s1:.1f}%</b> "
         f"are 1★; promoters (4–5★) hold <b>{high_share:.1f}%</b> vs "
         f"detractors (1–2★) at <b>{low_share:.1f}%</b>, a net margin of "
-        f"<b>{net:+.1f} pp</b>. <b>Interpretation:</b> overall sentiment is "
+        f"<b>{net:+.1f} pp</b>. Overall sentiment is "
         f"strongly positive, so the business is not broadly failing. "
         f"{shape} The detractor tail is where the improvement opportunity "
         f"sits, and the next charts test whether delivery performance "
@@ -944,6 +944,27 @@ def chart_punctuality_vs_satisfaction(year: str,
         c2.metric("Expected avg score", f"{new_mean:.3f}★")
         c3.metric("Δ vs current", f"{new_mean - sel_avg:+.3f}★",
                   delta_color="normal")
+        late_share_all = 100.0 * n_late / new_total if new_total else 0.0
+        _insight(
+            year, states,
+            f"Making <b>{pct}%</b> of the <b>{n_late:,}</b> late orders "
+            f"arrive on time (<b>{converted:,.0f}</b> orders) lifts the "
+            f"selection average from <b>{sel_avg:.3f}★</b> to "
+            f"<b>{new_mean:.3f}★</b> (<b>{new_mean - sel_avg:+.3f}★</b>). "
+            f"Late orders are only <b>{late_share_all:.1f}%</b> of the "
+            f"selection, so the overall average moves modestly, but every "
+            f"order converted is worth about "
+            f"<b>{on_mean - late_mean:.2f}★</b> to that customer, which "
+            f"means the gain is concentrated among the people who would "
+            f"otherwise leave a 1–2★ review. The projection assumes "
+            f"converted orders score at the on-time mean, so it is an "
+            f"upper-bound estimate."
+            + _impl(
+                "set a recovery target for late orders and confirm the "
+                "real lift with a controlled pilot before committing "
+                "logistics spend."
+            ),
+        )
     else:
         st.caption("Widen the filters to enable the what-if calculator.")
 
@@ -999,7 +1020,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"(<b>{q6_gap_pct}</b>) across <b>{late_share:.1f}%</b> of orders "
         f"that arrived late. The 1–2★ share rises from "
         f"<b>{on_time_dr:.1f}%</b> (on time) to <b>{top_dr:.1f}%</b> at "
-        f"<i>{top_det}</i>{mult_txt}. <b>Interpretation:</b> satisfaction "
+        f"<i>{top_det}</i>{mult_txt}. Satisfaction "
         f"falls as lateness grows — a dose–response pattern — so the "
         f"penalty is driven by <i>how badly</i> the promise is missed, not "
         f"merely by whether it is missed. This makes delivery punctuality "
@@ -1101,7 +1122,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
         text = (
             f"All delivered orders sit in the <b>{grp.iloc[0]['bucket']}</b> "
             f"bucket (<b>100.0%</b>, {grp.iloc[0]['avg_score']:.2f}★). "
-            f"<b>Interpretation:</b> with a single bucket there is no "
+            f"With a single bucket there is no "
             f"delivery-time contrast to read — widen the filters to see how "
             f"satisfaction changes with waiting time."
         )
@@ -1140,7 +1161,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
             f"({first['bucket']}, <b>{fast_share:.1f}%</b> of orders) to "
             f"<b>{last['avg_score']:.2f}★</b> ({last['bucket']}, "
             f"<b>{slow_share:.1f}%</b>). {below_txt}{cliff_txt} "
-            f"<b>Interpretation:</b> satisfaction {trend_word} as delivery "
+            f"Satisfaction {trend_word} as delivery "
             f"time grows, and the decline accelerates in the slowest "
             f"buckets rather than being linear. Customers tolerate a "
             f"moderate wait but punish long ones, so the priority is to stop "
@@ -1224,7 +1245,7 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
         text = (
             f"<b>{plot_df.iloc[0]['customer_state']}</b> averages "
             f"{plot_df.iloc[0]['avg_score']:.2f}★ (<b>100.0%</b> of "
-            f"orders). <b>Interpretation:</b> a single state gives no "
+            f"orders). A single state gives no "
             f"geographic contrast; select more states to compare."
         )
     else:
@@ -1250,7 +1271,7 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
             f"{high['share']:.1f}%) the high end — a <b>{spread:.2f}★</b> "
             f"spread (<b>{spread_pct:.1f}%</b>). <b>{weak_share:.1f}%</b> of "
             f"orders sit in states scoring &lt; 4.10★.{compare_txt} "
-            f"<b>Interpretation:</b> satisfaction is fairly uniform across "
+            f"Satisfaction is fairly uniform across "
             f"the biggest markets, so there is no broad regional problem — "
             f"just a few lagging states (red/amber bars). Those are the "
             f"candidates for targeted operational review, and the next "
@@ -1332,7 +1353,7 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
         f"<b>{best['customer_state']}</b> best at "
         f"<b>{best['late_pct']:.1f}%</b> — a "
         f"<b>{worst['late_pct'] - best['late_pct']:.1f} pp</b> spread. "
-        f"<b>Interpretation:</b> the red bars are small next to the green "
+        f"The red bars are small next to the green "
         f"ones everywhere, so most orders arrive on time, but lateness is "
         f"not evenly spread — <b>{worst['customer_state']}</b> misses its "
         f"promise much more often than {best['customer_state']}. Compare "
@@ -1437,7 +1458,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         f"<b>{grp.loc[high_i,'month']}</b> "
         f"({grp.loc[high_i,'avg_score']:.2f}★) — a "
         f"<b>{swing:.2f}★</b> (<b>{swing_pct:.1f}%</b>) range across the "
-        f"period.{cmp_txt} <b>Interpretation:</b> satisfaction moves over "
+        f"period.{cmp_txt} Satisfaction moves over "
         f"time rather than holding flat, and the lowest point marks a "
         f"month where the customer experience visibly deteriorated. Sharp "
         f"dips usually coincide with demand peaks or logistics disruption "
@@ -1644,7 +1665,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         f"<b>{hi_pct:.1f}%</b> of the total) and <b>{lo_s}</b> the fewest "
         f"({int(lo_v):,}, <b>{lo_pct:.1f}%</b>). The top 3 "
         f"(<b>{top3_names}</b>) hold <b>{top3_pct:.1f}%</b> of all "
-        f"reviews. {mode} <b>Interpretation:</b> customer feedback is "
+        f"reviews. {mode} Customer feedback is "
         f"heavily concentrated in a few large markets, which means their "
         f"experience largely sets the national average and a delivery "
         f"improvement there moves overall satisfaction the most. "
@@ -1861,7 +1882,7 @@ def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
         f"average delivery took <b>{fmt_float(k['avg_delivery_days'])} "
         f"days</b> and <b>{fmt_int(k['late_deliveries'])}</b> deliveries "
         f"(<b>{fmt_pct(k['late_pct'])}</b> of delivered) were late. "
-        f"<b>Interpretation:</b> a high completion rate shows fulfilment "
+        f"A high completion rate shows fulfilment "
         f"works for most orders, but completing an order does not by itself "
         f"satisfy the customer — the timeliness of fulfilment matters just "
         f"as much."
@@ -1882,7 +1903,7 @@ def render_decision_insight(year: str, states: tuple[str, ...]) -> None:
         f"Orders delivered on time average <b>{g['on_time']:.2f}★</b> "
         f"(n={g['n_on']:,}) versus <b>{g['late']:.2f}★</b> for late orders "
         f"(n={g['n_late']:,}) — a gap of <b>{g['gap']:.2f}★</b>{pct_txt}. "
-        f"<b>Interpretation:</b> customers who receive orders within the "
+        f"Customers who receive orders within the "
         f"promised period report far better experiences, which suggests "
         f"that meeting the delivery commitment may matter more than "
         f"delivering faster. This is an association, not proof of "
@@ -1914,7 +1935,7 @@ def render_data_quality_insight() -> None:
         f"extra records from orders reviewed more than once — and "
         f"<b>{customer_rows:,}</b> customer rows represent only "
         f"<b>{unique_customers:,}</b> unique customer identities. "
-        f"<b>Interpretation:</b> counting review rows as orders, or "
+        f"Counting review rows as orders, or "
         f"customer rows as people, would inflate both figures."
     ) + _impl(
         "average multiple reviews to order level for order-level "
@@ -2045,6 +2066,20 @@ def render_priority_matrix() -> None:
     st.caption(
         "Top-left = **do first** (high impact, low effort). "
         "R2 and R5 are quick wins; R1 is the highest-ceiling project."
+    )
+    _insight(
+        "All", (),
+        "Two actions combine high impact with low effort: <b>R2</b> "
+        "(intervene on ageing orders before day 20) and <b>R5</b> (promise "
+        "reliability, not speed), so they can start immediately. "
+        "<b>R1</b> (Rio de Janeiro delivery failures) has the largest "
+        "ceiling but needs a medium-effort audit and pilot. <b>R3</b> and "
+        "<b>R4</b> follow once the first results show which fixes work."
+        + _impl(
+            "start with R2 and R5 now, run the RJ investigation in "
+            "parallel, and use what it finds to shape the Bahia pilot."
+        ),
+        scope="Whole dataset · recommendations (unfiltered)",
     )
 
 
@@ -3031,11 +3066,21 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
                 "avg_days_late": round(float(dl.mean()), 2),
                 "worst_days_late": round(float(dl.max()), 2),
             }]))
-            st.caption(
-                f"When late, orders run **{dl.mean():.2f} days past "
-                f"estimate** on average; the worst case is "
-                f"**{dl.max():.1f} days**. Late orders are "
-                f"**{late_share:.1f}%** of all delivered orders."
+            _insight(
+                "All", (),
+                f"When orders are late they miss the estimate by "
+                f"<b>{dl.mean():.2f} days</b> on average, and the worst "
+                f"case is <b>{dl.max():.1f} days</b> past it. Late orders "
+                f"are <b>{late_share:.1f}%</b> of delivered orders. A "
+                f"typical miss of more than a week points to estimates that "
+                f"are systematically optimistic rather than to small random "
+                f"slippage."
+                + _impl(
+                    "recalibrate estimated delivery dates from realised "
+                    "transit history, and review the extreme late cases "
+                    "individually."
+                ),
+                scope="Whole dataset (unfiltered)",
             )
     except Exception as exc:
         _LOGGER.warning("Late diagnostics failed: %s", exc)
