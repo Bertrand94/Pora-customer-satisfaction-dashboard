@@ -5,3 +5,4 @@ seaborn
 requests
 scipy
 plotly
+numpy
