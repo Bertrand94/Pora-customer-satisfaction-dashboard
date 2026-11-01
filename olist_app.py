@@ -717,7 +717,14 @@ def chart_review_distribution() -> None:
         f"strongly positive, so the business is not broadly failing. "
         f"{shape} The detractor tail is where the improvement opportunity "
         f"sits, and the next charts test whether delivery performance "
-        f"explains it.",
+        f"explains it." + _impl(
+            f"keep protecting the experience behind the "
+            f"{high_share:.1f}% of 4–5★ reviews, but aim improvement "
+            f"effort at the {low_share:.1f}% detractors — find the "
+            f"operational problems (starting with delivery) behind the "
+            f"1–2★ reviews rather than treating satisfaction as "
+            f"broadly weak."
+        ),
         scope="All years · All states (unfiltered baseline)",
     )
 
@@ -998,6 +1005,13 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"merely by whether it is missed. This makes delivery punctuality "
         f"the strongest lever in the data, although it is an association, "
         f"not proof of causation (see limitation L1).{noisy_txt}"
+        + _impl(
+            f"prioritise reliability over raw speed — keep promised "
+            f"dates realistic, monitor fulfilment timelines and act "
+            f"before the promised date passes — and focus on stopping "
+            f"delays from becoming prolonged: <i>{top_det}</i> orders "
+            f"show the highest dissatisfaction."
+        )
     )
     _partial_note(year)
 
@@ -1132,6 +1146,11 @@ def chart_satisfaction_by_delivery_bucket(year: str,
             f"moderate wait but punish long ones, so the priority is to stop "
             f"orders drifting into the slow tail — monitor ageing orders "
             f"and intervene before the steepest step."
+            + _impl(
+                "monitor orders approaching 20 days, send early-warning "
+                "notifications and escalate delayed parcels before they "
+                "reach the 21+ day buckets, where scores fall away."
+            )
         )
     _insight(year, states, text)
 
@@ -1236,7 +1255,14 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
             f"just a few lagging states (red/amber bars). Those are the "
             f"candidates for targeted operational review, and the next "
             f"chart checks whether late deliveries explain their lower "
-            f"scores."
+            f"scores." + _impl(
+                f"investigate regional delivery networks, seller "
+                f"fulfilment and last-mile logistics in lower-scoring "
+                f"states such as <b>{low['customer_state']}</b> rather "
+                f"than applying one identical fix everywhere. A low "
+                f"state score says where to look; it does not prove that "
+                f"location itself causes dissatisfaction."
+            )
         )
     _insight(year, states, text)
 
@@ -1313,6 +1339,13 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
         f"this with the state score chart: a state that is both late-heavy "
         f"and low-scoring supports delivery as the cause of lower "
         f"satisfaction, and is where a logistics fix pays back first."
+        + _impl(
+            f"audit carrier performance, warehouse dispatch, transport "
+            f"routes and last-mile hand-offs in "
+            f"<b>{worst['customer_state']}</b> "
+            f"({worst['late_pct']:.1f}% late vs {overall_pct:.1f}% for the "
+            f"top-5 group), then pilot fixes before scaling them."
+        )
     )
 
 
@@ -1411,6 +1444,12 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         f"stressing delivery (consistent with the delivery finding, though "
         f"this chart alone cannot prove it) — check late-delivery rates "
         f"for that month before drawing conclusions.{note}"
+        + _impl(
+            f"pair <b>{grp.loc[low_i,'month']}</b> with that month's "
+            f"late-delivery rate and order volume; if lateness spiked, "
+            f"add a monthly late-rate alert and peak-season capacity "
+            f"planning so dips are caught early."
+        )
     )
     _partial_note(year)
 
@@ -1611,7 +1650,12 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         f"improvement there moves overall satisfaction the most. "
         f"Conversely, low-volume states rest on few reviews, so their "
         f"averages are volatile — treat them as signals to monitor, not "
-        f"as firm conclusions."
+        f"as firm conclusions." + _impl(
+            f"prioritise delivery improvements in the largest markets "
+            f"(<b>{top3_names}</b>) because they move the national "
+            f"average most, and track low-volume states as signals to "
+            f"watch rather than firm conclusions."
+        )
     )
 
 
@@ -1797,6 +1841,152 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
         </div>
         """,
         unsafe_allow_html=True,
+    )
+
+
+def _impl(text: str) -> str:
+    """Business-implication line, rendered inside an insight box."""
+    return ('<span class="insight-impl"><b>Business implication:</b> '
+            f'{text}</span>')
+
+
+def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
+    k = query_kpis(year, states)
+    if not k.get("total_orders"):
+        return
+    text = (
+        f"<b>{fmt_int(k['delivered_orders'])}</b> of "
+        f"<b>{fmt_int(k['total_orders'])}</b> orders "
+        f"(<b>{fmt_pct(k['delivered_pct'])}</b>) were delivered, yet the "
+        f"average delivery took <b>{fmt_float(k['avg_delivery_days'])} "
+        f"days</b> and <b>{fmt_int(k['late_deliveries'])}</b> deliveries "
+        f"(<b>{fmt_pct(k['late_pct'])}</b> of delivered) were late. "
+        f"<b>Interpretation:</b> a high completion rate shows fulfilment "
+        f"works for most orders, but completing an order does not by itself "
+        f"satisfy the customer — the timeliness of fulfilment matters just "
+        f"as much."
+    ) + _impl(
+        "track both delivery completion and adherence to the promised "
+        "date when judging logistics performance."
+    )
+    _insight(year, states, text)
+
+
+def render_decision_insight(year: str, states: tuple[str, ...]) -> None:
+    g = query_headline_gap(year, states)
+    if g["gap"] is None:
+        return
+    pct_txt = (f" (<b>{g['gap_pct']:.1f}%</b>)"
+               if g["gap_pct"] is not None else "")
+    text = (
+        f"Orders delivered on time average <b>{g['on_time']:.2f}★</b> "
+        f"(n={g['n_on']:,}) versus <b>{g['late']:.2f}★</b> for late orders "
+        f"(n={g['n_late']:,}) — a gap of <b>{g['gap']:.2f}★</b>{pct_txt}. "
+        f"<b>Interpretation:</b> customers who receive orders within the "
+        f"promised period report far better experiences, which suggests "
+        f"that meeting the delivery commitment may matter more than "
+        f"delivering faster. This is an association, not proof of "
+        f"causation (limitation L1)."
+    ) + _impl(
+        "make delivery reliability a core satisfaction priority: monitor "
+        "fulfilment timelines and address delays before the promised "
+        "delivery date."
+    )
+    _insight(year, states, text)
+
+
+def render_data_quality_insight() -> None:
+    try:
+        frames = load_data()
+        reviews = frames["reviews"]
+        customers = frames["customers"]
+        review_rows = len(reviews)
+        distinct_orders = int(reviews["order_id"].nunique())
+        extra = review_rows - distinct_orders
+        customer_rows = len(customers)
+        unique_customers = int(customers["customer_unique_id"].nunique())
+    except Exception as exc:
+        _LOGGER.warning("Data-quality insight failed: %s", exc)
+        return
+    text = (
+        f"<b>{review_rows:,}</b> review records belong to "
+        f"<b>{distinct_orders:,}</b> distinct orders — <b>{extra:,}</b> "
+        f"extra records from orders reviewed more than once — and "
+        f"<b>{customer_rows:,}</b> customer rows represent only "
+        f"<b>{unique_customers:,}</b> unique customer identities. "
+        f"<b>Interpretation:</b> counting review rows as orders, or "
+        f"customer rows as people, would inflate both figures."
+    ) + _impl(
+        "average multiple reviews to order level for order-level "
+        "analysis and use <code>customer_unique_id</code> for any "
+        "person-level count, so decisions rest on reliable feedback data."
+    )
+    _insight(
+        "All", (), text,
+        scope="Whole dataset (source-data diagnostics, unfiltered)",
+    )
+
+
+def render_key_findings() -> None:
+    st.markdown("### 🏆 Three strongest findings")
+    st.caption(
+        "Whole-dataset figures, ordered as a presentation story: "
+        "delivery punctuality, prolonged delivery, regional performance."
+    )
+    c1, c2, c3 = st.columns(3, gap="medium")
+    with c1:
+        info_card(
+            "Finding 1 · Delivery punctuality",
+            f"""<p><b style="font-size:1.5rem;">{REF['star_gap']:.2f}★
+            gap</b></p>
+            <p>On-time deliveries score <b>{REF['on_time_score']:.2f}★</b>
+            versus <b>{REF['late_score']:.2f}★</b> for late ones — about
+            40% lower.</p>
+            <p><b>Implication.</b> Improving delivery reliability should be
+            the main satisfaction priority.</p>""",
+            variant="warn", tags=["Whole dataset", "Q6"],
+        )
+    with c2:
+        info_card(
+            "Finding 2 · Prolonged delivery",
+            """<p><b style="font-size:1.5rem;">2.26★</b></p>
+            <p>Orders taking more than 30 days score lowest, down from
+            4.45★ for 0–5 days.</p>
+            <p><b>Implication.</b> Intervene early when an order
+            approaches 20 days without delivery.</p>""",
+            variant="warn", tags=["Whole dataset", "Delivery time"],
+        )
+    with c3:
+        info_card(
+            "Finding 3 · Regional performance",
+            """<p><b style="font-size:1.5rem;">13.5% late in RJ</b></p>
+            <p>About 2.3× the 5.9% national late rate, with RJ also
+            scoring 3.87★ on average.</p>
+            <p><b>Implication.</b> Investigate regional logistics and
+            carrier performance, beginning with Rio de Janeiro.</p>""",
+            variant="info", tags=["Whole dataset", "RJ"],
+        )
+
+
+def render_conclusion() -> None:
+    st.divider()
+    st.markdown("### Overall business conclusion")
+    info_card(
+        "Positive sentiment, delivery reliability is the gap",
+        f"""<p>Olist keeps generally positive satisfaction
+        (<b>{REF['avg_review_score']:.2f}★</b> average). Delivery
+        performance is the main area to improve: on-time customers are
+        far more satisfied than those whose orders arrive late, and
+        longer delivery periods bring increasingly negative reviews.
+        Rio de Janeiro and Bahia show that some markets need targeted
+        attention.</p>
+        <p><b>Priorities.</b> Delivery reliability, early intervention for
+        delayed orders, regional logistics management and continuous
+        monitoring of customer feedback — reducing negative experiences
+        and strengthening customer confidence.</p>
+        <p><i>Association, not causation: these findings point to where to
+        act, and pilots should confirm the effect.</i></p>""",
+        variant="ok", tags=["Conclusion", "Capstone"],
     )
 
 
@@ -2366,6 +2556,12 @@ GLOBAL_CSS: Final[str] = """
   }
   .insight-text { color: var(--slate-600); line-height: 1.6; }
   .insight-text b { color: var(--ink); font-weight: 700; }
+  .insight-impl {
+    display: block; margin-top: 8px; padding-top: 8px;
+    border-top: 1px dashed var(--brand-light);
+    color: var(--ink-soft); font-weight: 500;
+  }
+  .insight-text .insight-impl b { color: var(--brand-dark); }
 
   .verdict-card {
     display: flex; flex-direction: column; gap: 4px;
@@ -2634,6 +2830,7 @@ def render_overview(year: str, states: tuple[str, ...],
         )
 
     render_headline_strip(year, states)
+    render_kpi_insight(year, states)
 
     # Not filterable by design.
     _chart_card(chart_review_distribution)
@@ -2653,6 +2850,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     try:
         render_decision_snapshot(year, states)
+        render_decision_insight(year, states)
     except Exception as exc:
         _LOGGER.warning("Decision snapshot failed: %s", exc)
 
@@ -2817,6 +3015,8 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         _LOGGER.warning("Diagnostics block failed: %s", exc)
         st.caption("Diagnostics unavailable for the current dataset.")
 
+    render_data_quality_insight()
+
     try:
         model = get_model()
         late = model[model["is_late"]]
@@ -2860,6 +3060,7 @@ def render_recommendations() -> None:
         _LOGGER.warning("Priority matrix failed: %s", exc)
 
     st.divider()
+    render_key_findings()
     st.markdown("### Prioritised recommendations")
     st.caption(
         "Each card carries evidence, action, lead and measures — ready to "
@@ -2884,8 +3085,8 @@ def render_recommendations() -> None:
     info_card(
         "🔴 R2 — Trigger intervention before day 20",
         """<p><b>Evidence.</b> Delivery buckets decline 4.45 → 4.36 →
-        4.22 → 3.69 → 2.26. The largest single step (−0.53 stars, ≈12%)
-        is between 11–20 days and 21–30 days — a <b>49%</b> drop from the
+        4.22 → 3.69 → 2.26. Satisfaction first drops sharply (−0.53 stars, ≈12%)
+        between 11–20 and 21–30 days, then collapses (−1.43 stars) beyond 30 days — a <b>49%</b> drop from the
         fastest bucket to the slowest.</p>
         <p><b>Action.</b> Ageing-order alerts; escalate at-risk
         parcels; revised ETAs.</p>
@@ -2937,6 +3138,7 @@ def render_recommendations() -> None:
         tags=["Impact: High", "Effort: Low", "Brand"],
         priority="low",
     )
+    render_conclusion()
 
 
 # ════════════════════════════════════════════════════════════════════════════
