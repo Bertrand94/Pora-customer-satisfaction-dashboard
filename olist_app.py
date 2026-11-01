@@ -21,8 +21,8 @@ DEPLOY
   Cloud:    Streamlit Community Cloud → set OLIST_DATA_DIR if CSVs
             are not in ./data
 REQUIREMENTS
-  streamlit>=1.30 · pandas>=2.0 · matplotlib>=3.7 · requests
-  Optional: scipy (CI), plotly (interactive matrix)
+  streamlit · pandas · matplotlib · requests · plotly · scipy
+  See requirements.txt for tested deployment dependency ranges.
 ════════════════════════════════════════════════════════════════════════════
 """
 
@@ -291,15 +291,37 @@ def _get_logo_base64() -> str:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _data_dir() -> str:
+    """Return the configured directory containing the four Olist CSV files."""
     return os.environ.get(
         "OLIST_DATA_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
     )
 
 
+def _data_signature() -> str:
+    """Fingerprint file metadata so edits invalidate Streamlit's data cache.
+
+    A row-count-only fingerprint can return stale results after a CSV is
+    replaced with another file containing the same number of rows. File size
+    and nanosecond modification time provide a lightweight cache key.
+    """
+    parts: list[str] = []
+    directory = _data_dir()
+    for table, filename in sorted(CONFIG.tables.items()):
+        path = os.path.join(directory, filename)
+        try:
+            stat = os.stat(path)
+            parts.append(f"{table}:{stat.st_size}:{stat.st_mtime_ns}")
+        except OSError:
+            parts.append(f"{table}:missing")
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Loading Olist data…")
-def load_data() -> dict[str, pd.DataFrame]:
+def load_data(data_signature: str = "") -> dict[str, pd.DataFrame]:
+    # data_signature is intentionally part of the cache key; the actual
+    # signature is computed by the caller from the four source files.
     data_dir = _data_dir()
     frames: dict[str, pd.DataFrame] = {}
 
@@ -327,6 +349,26 @@ def load_data() -> dict[str, pd.DataFrame]:
                 f"Table {table!r} missing required columns: {missing}"
             )
 
+    # Critical-key checks catch common CSV corruption before joins silently
+    # multiply rows or produce misleading metrics.
+    for table, key in (("orders", "order_id"), ("customers", "customer_id")):
+        duplicate_count = int(frames[table][key].duplicated().sum())
+        if duplicate_count:
+            raise ValueError(
+                f"Table {table!r} contains {duplicate_count:,} duplicate "
+                f"values in its key column {key!r}. Please clean the source CSV."
+            )
+
+    score_values = pd.to_numeric(
+        frames["reviews"]["review_score"], errors="coerce"
+    )
+    invalid_scores = int((~score_values.dropna().between(1, 5)).sum())
+    if invalid_scores:
+        _LOGGER.warning(
+            "Reviews CSV contains %s review scores outside the 1–5 range; "
+            "these values should be investigated.", invalid_scores,
+        )
+
     _LOGGER.info(
         "Data loaded: %d tables, %d rows",
         len(frames), sum(len(df) for df in frames.values()),
@@ -337,7 +379,7 @@ def load_data() -> dict[str, pd.DataFrame]:
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Preparing analysis model…")
 def build_model(frames_fingerprint: str) -> pd.DataFrame:
-    frames = load_data()
+    frames = load_data(_data_signature())
     orders    = frames["orders"].copy()
     customers = frames["customers"][["customer_id", "customer_state"]].copy()
     reviews   = frames["reviews"][["order_id", "review_score"]].copy()
@@ -390,11 +432,10 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
 
 def get_model() -> pd.DataFrame:
-    frames = load_data()
-    fingerprint = hashlib.md5(
-        "|".join(f"{k}:{len(v)}" for k, v in sorted(frames.items())).encode()
-    ).hexdigest()
-    return build_model(fingerprint)
+    # Include file metadata in both cache layers so a replaced CSV is picked
+    # up on the next rerun, even when its row count has not changed.
+    signature = _data_signature()
+    return build_model(signature)
 
 
 def apply_filters(df: pd.DataFrame, year: str,
@@ -423,7 +464,7 @@ def is_partial_year(year: str | None) -> bool:
 def _reviews_with_order_scope(
     year: str, states_tuple: tuple[str, ...], *, delivered_only: bool = False
 ) -> pd.DataFrame:
-    frames = load_data()
+    frames = load_data(_data_signature())
     model = apply_filters(get_model(), year, list(states_tuple))
     if model is None or model.empty:
         return pd.DataFrame(
@@ -1918,7 +1959,7 @@ def render_decision_insight(year: str, states: tuple[str, ...]) -> None:
 
 def render_data_quality_insight() -> None:
     try:
-        frames = load_data()
+        frames = load_data(_data_signature())
         reviews = frames["reviews"]
         customers = frames["customers"]
         review_rows = len(reviews)
@@ -2147,7 +2188,7 @@ GLOBAL_CSS: Final[str] = """
 
   h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
   .hero-label, .exec-summary-eyebrow {
-    font-family: 'Sora', 'Inter', sans-serif !important;
+    font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
     letter-spacing: -0.02em;
     color: var(--ink);
   }
@@ -2362,7 +2403,7 @@ GLOBAL_CSS: Final[str] = """
     font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.85rem) !important;
     letter-spacing: -0.025em;
     line-height: 1.15;
-    font-family: 'Sora', 'Inter', sans-serif !important;
+    font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
     font-variant-numeric: tabular-nums;
     margin-top: 4px;
   }
@@ -2640,6 +2681,29 @@ GLOBAL_CSS: Final[str] = """
   .stPyplot { margin-top: var(--s1); }
 
   hr { border-color: var(--slate-200); margin: var(--s5) 0; }
+
+  /* Accessible keyboard focus and predictable text rendering. */
+  :focus-visible {
+    outline: 3px solid #818CF8 !important;
+    outline-offset: 2px !important;
+    border-radius: 6px;
+  }
+  body, [data-testid="stAppViewContainer"] {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont,
+                 'Segoe UI', sans-serif;
+    text-rendering: optimizeLegibility;
+  }
+  .stCaption, [data-testid="stCaptionContainer"] {
+    line-height: 1.55;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
 
   @media (max-width: 1100px) {
     .app-hero { flex-direction: column; align-items: flex-start;
@@ -3017,7 +3081,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     )
 
     try:
-        frames = load_data()
+        frames = load_data(_data_signature())
         reviews = frames["reviews"]
         customers = frames["customers"]
 
@@ -3211,7 +3275,7 @@ def main() -> None:
     st.session_state.setdefault("active_tab", NAV_TABS[0])
 
     try:
-        load_data()
+        load_data(_data_signature())
     except (FileNotFoundError, ValueError) as exc:
         _LOGGER.exception("Data load failed")
         st.error(
