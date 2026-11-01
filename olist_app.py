@@ -8,14 +8,6 @@ A decision-first dashboard built on 99,441 Olist orders (2016–2018).
 Primary finding: delivery punctuality is the #1 satisfaction lever —
 late orders cost ~1.73★ (40% of the on-time score).
 
-TAB LAYOUT
-  1. Overview               KPIs + Review Score Distribution (NOT filterable)
-  2. Customer Satisfaction  Delivery-time buckets, state scores, on-time by
-                            state, monthly trend, Brazil reviews map
-  3. Detail & Method        Delivery Punctuality vs Satisfaction (+ what-if),
-                            limitations, whole-dataset diagnostics
-  4. Recommendations
-
 DEPLOY
   Local:    streamlit run olist_app.py
   Cloud:    Streamlit Community Cloud → set OLIST_DATA_DIR if CSVs
@@ -42,6 +34,17 @@ import pandas as pd
 import requests
 import streamlit as st
 from matplotlib.ticker import FuncFormatter
+
+# Configure the Streamlit page before any UI elements are rendered.
+st.set_page_config(
+    page_title="Customer Satisfaction | Olist",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "About": "PORA Academy Cohort 7 · Group 1 Customer Satisfaction Capstone"
+    },
+)
 
 # ════════════════════════════════════════════════════════════════════════════
 # §1  CONFIGURATION
@@ -74,9 +77,9 @@ REF: Final[dict[str, Any]] = {
 @dataclass(frozen=True)
 class Palette:
     # Brand
-    primary:       str = "#0F766E"   # Teal 700
-    primary_light: str = "#99F6E4"
-    primary_dark:  str = "#115E59"
+    primary:       str = "#6366F1"   # Indigo 500
+    primary_light: str = "#A5B4FC"
+    primary_dark:  str = "#4338CA"
     accent:        str = "#F97316"   # Orange 500
     accent_light:  str = "#FDBA74"
     accent_dark:   str = "#C2410C"
@@ -291,16 +294,33 @@ def _get_logo_base64() -> str:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _data_dir() -> str:
-    return os.environ.get(
+    return os.path.abspath(os.environ.get(
         "OLIST_DATA_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
-    )
+    ))
+
+
+def _source_fingerprint(data_dir: str) -> str:
+    """Return a cheap cache key that changes when any source CSV changes."""
+    signatures = []
+    for table, filename in sorted(CONFIG.tables.items()):
+        path = os.path.join(data_dir, filename)
+        try:
+            stat = os.stat(path)
+            signatures.append(f"{table}:{stat.st_size}:{stat.st_mtime_ns}")
+        except OSError:
+            signatures.append(f"{table}:missing")
+    return hashlib.sha256("|".join(signatures).encode()).hexdigest()
 
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Loading Olist data…")
-def load_data() -> dict[str, pd.DataFrame]:
-    data_dir = _data_dir()
+def load_data(data_dir: str | None = None,
+              source_fingerprint: str | None = None) -> dict[str, pd.DataFrame]:
+    data_dir = os.path.abspath(data_dir or _data_dir())
+    # source_fingerprint participates in Streamlit's cache key so an updated
+    # CSV at the same path is not hidden behind a stale cached DataFrame.
+    source_fingerprint = source_fingerprint or _source_fingerprint(data_dir)
     frames: dict[str, pd.DataFrame] = {}
 
     for table, filename in CONFIG.tables.items():
@@ -327,14 +347,33 @@ def load_data() -> dict[str, pd.DataFrame]:
                 f"Table {table!r} missing required columns: {missing}"
             )
 
-    # Fail early on malformed review scores rather than silently charting them.
-    review_scores = pd.to_numeric(frames["reviews"]["review_score"], errors="coerce")
-    invalid_scores = review_scores.notna() & ~review_scores.between(1, 5)
-    if invalid_scores.any():
+    # Guard against join fan-out caused by duplicate dimension keys.
+    duplicate_orders = int(frames["orders"]["order_id"].duplicated().sum())
+    duplicate_customer_keys = int(
+        frames["customers"]["customer_id"].duplicated().sum()
+    )
+    if duplicate_orders:
+        raise ValueError(
+            f"Orders table contains {duplicate_orders:,} duplicate order_id values. "
+            "Resolve duplicate order keys before deployment."
+        )
+    if duplicate_customer_keys:
+        raise ValueError(
+            f"Customers table contains {duplicate_customer_keys:,} duplicate customer_id values. "
+            "This would multiply order rows during the join."
+        )
+
+    review_scores = pd.to_numeric(
+        frames["reviews"]["review_score"], errors="coerce"
+    )
+    invalid_scores = int(
+        (review_scores.notna() & ~review_scores.between(1, 5)).sum()
+    )
+    if invalid_scores:
         _LOGGER.warning(
-            "Found %d review score value(s) outside the expected 1–5 range; "
-            "they will be excluded from score-based summaries.",
-            int(invalid_scores.sum()),
+            "Found %s review_score values outside the expected 1–5 range; "
+            "they will be excluded from valid score calculations.",
+            invalid_scores,
         )
 
     _LOGGER.info(
@@ -346,8 +385,10 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Preparing analysis model…")
-def build_model(frames_fingerprint: str) -> pd.DataFrame:
-    frames = load_data()
+def build_model(frames_fingerprint: str, data_dir: str) -> pd.DataFrame:
+    # The fingerprint and resolved directory form the cache key. This prevents
+    # stale results when a CSV is replaced while keeping reruns inexpensive.
+    frames = load_data(data_dir, frames_fingerprint)
     orders    = frames["orders"].copy()
     customers = frames["customers"][["customer_id", "customer_state"]].copy()
     reviews   = frames["reviews"][["order_id", "review_score"]].copy()
@@ -387,8 +428,25 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
     df["is_late"] = (
         df["order_status"].eq("delivered")
+        & df["order_delivered_customer_date"].notna()
+        & df["order_estimated_delivery_date"].notna()
         & (df["order_delivered_customer_date"]
            > df["order_estimated_delivery_date"])
+    )
+    # The project reference KPI (7,826) includes 165 delivered-status rows
+    # without a delivered timestamp. Keep these separate from confirmed late
+    # deliveries so the KPI is transparent and the Q5/Q6 comparison remains
+    # based only on orders with a usable delivery date.
+    df["is_late_or_missing_date"] = (
+        df["order_status"].eq("delivered")
+        & (
+            df["order_delivered_customer_date"].isna()
+            | (
+                df["order_estimated_delivery_date"].notna()
+                & (df["order_delivered_customer_date"]
+                   > df["order_estimated_delivery_date"])
+            )
+        )
     )
 
     df["days_late"] = (
@@ -400,20 +458,11 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
 
 def get_model() -> pd.DataFrame:
-    frames = load_data()
-    # Include file size + nanosecond mtime so replacing a CSV with the same
-    # number of rows invalidates the cached model. The cache key remains cheap.
     data_dir = _data_dir()
-    signatures = []
-    for table, filename in sorted(CONFIG.tables.items()):
-        path = os.path.join(data_dir, filename)
-        try:
-            stat = os.stat(path)
-            signatures.append(f"{table}:{stat.st_size}:{stat.st_mtime_ns}")
-        except OSError:
-            signatures.append(f"{table}:missing")
-    fingerprint = hashlib.sha256("|".join(signatures).encode("utf-8")).hexdigest()
-    return build_model(fingerprint)
+    fingerprint = _source_fingerprint(data_dir)
+    # Read with the same fingerprint used as the cache key for the model.
+    load_data(data_dir, fingerprint)
+    return build_model(fingerprint, data_dir)
 
 
 def apply_filters(df: pd.DataFrame, year: str,
@@ -442,7 +491,8 @@ def is_partial_year(year: str | None) -> bool:
 def _reviews_with_order_scope(
     year: str, states_tuple: tuple[str, ...], *, delivered_only: bool = False
 ) -> pd.DataFrame:
-    frames = load_data()
+    data_dir = _data_dir()
+    frames = load_data(data_dir, _source_fingerprint(data_dir))
     model = apply_filters(get_model(), year, list(states_tuple))
     if model is None or model.empty:
         return pd.DataFrame(
@@ -486,6 +536,7 @@ def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
     delivered_with_date = delivered_status[
         delivered_status["order_delivered_customer_date"].notna()
     ]
+    late_or_missing = delivered_status["is_late_or_missing_date"]
 
     reviews = _reviews_with_order_scope(year, states_tuple, delivered_only=False)
     avg_review = _safe_mean(reviews["review_score"]) if not reviews.empty else None
@@ -496,10 +547,7 @@ def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
 
     total_orders     = int(df["order_id"].nunique())
     delivered_orders = int(delivered_status["order_id"].nunique())
-    late_deliveries  = (
-        int(delivered_with_date["is_late"].sum())
-        if not delivered_with_date.empty else 0
-    )
+    late_deliveries  = int(late_or_missing.sum())
 
     delivered_pct = _safe_div(delivered_orders, total_orders)
     late_pct      = _safe_div(late_deliveries, delivered_orders)
@@ -587,17 +635,13 @@ def _no_data(msg: str = "No data for the current filters.") -> None:
     )
 
 
-def _insight(year: str, states: Sequence[str], text: str,
-             scope: str | None = None) -> None:
-    """Insight box. `text` may contain HTML. `scope` overrides the scope
-    label (used by the unfiltered Review Score Distribution)."""
-    scope_txt = scope if scope is not None else scope_label(year, states)
+def _insight(year: str, states: Sequence[str], text: str) -> None:
     st.markdown(
         f"""
         <div class="insight">
           <span class="insight-chip">💡 Insight</span>
           <div class="insight-body">
-            <span class="insight-scope">{scope_txt}</span>
+            <span class="insight-scope">{scope_label(year, states)}</span>
             <span class="insight-text">{text}</span>
           </div>
         </div>
@@ -655,20 +699,11 @@ def _chart_card(fn: Callable[..., None], *args, **kwargs) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6  OVERVIEW CHART  (Q2) — NOT FILTERABLE
+# §6  OVERVIEW CHARTS  (Q2, Q8)
 # ════════════════════════════════════════════════════════════════════════════
 
-def chart_review_distribution() -> None:
-    """Review Score Distribution — intentionally ignores the sidebar
-    filters and always describes the whole dataset."""
-    year: str = "All"
-    states: tuple[str, ...] = ()
-
+def chart_review_distribution(year: str, states: tuple[str, ...]) -> None:
     st.markdown("### Review Score Distribution")
-    st.caption(
-        "🔒 This chart is **not affected by the Year / State filters** — "
-        "it always shows the whole dataset as the baseline."
-    )
     df = _reviews_with_order_scope(year, states)
     df = df[df["review_score"].notna()] if not df.empty else df
     if df is None or df.empty:
@@ -692,8 +727,7 @@ def chart_review_distribution() -> None:
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.bar(counts.index.astype(str), counts.values, color=shades,
                   edgecolor=PALETTE.white, linewidth=1.4)
-    ax.set_title("Review Score Distribution (whole dataset)", pad=14,
-                 loc="left")
+    ax.set_title("Review Score Distribution", pad=14, loc="left")
     ax.set_xlabel("Review score (stars)")
     ax.set_ylabel("Number of reviews")
     ax.set_ylim(0, counts.max() * 1.15)
@@ -705,53 +739,90 @@ def chart_review_distribution() -> None:
                 fontsize=10, color=PALETTE.slate_700, fontweight="bold")
     _finish(fig)
 
-    s1 = float(pct.get(1, 0.0)); s2 = float(pct.get(2, 0.0))
-    s3 = float(pct.get(3, 0.0)); s5 = float(pct.get(5, 0.0))
+    s5 = float(pct.get(5, 0.0)); s1 = float(pct.get(1, 0.0))
     low_share  = float(pct.loc[pct.index.isin([1, 2])].sum())
     high_share = float(pct.loc[pct.index.isin([4, 5])].sum())
-    net = high_share - low_share
-
-    if s1 > s2 and s1 > s3:
-        shape = (
-            f"The distribution is <b>polarised (U-shaped)</b>: 1★ "
-            f"({s1:.1f}%) is larger than both 2★ ({s2:.1f}%) and 3★ "
-            f"({s3:.1f}%), so unhappy customers tend to be <i>very</i> "
-            f"unhappy rather than mildly disappointed — the pattern of a "
-            f"failed experience (such as a late or missing parcel) rather "
-            f"than a marginal product gripe."
-        )
-    else:
-        shape = (
-            "Dissatisfaction is spread across the lower stars rather than "
-            "concentrated at 1★, which points to milder, more diffuse "
-            "disappointment."
-        )
-
     _insight(
         year, states,
-        f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ and <b>{s1:.1f}%</b> "
-        f"are 1★; promoters (4–5★) hold <b>{high_share:.1f}%</b> vs "
-        f"detractors (1–2★) at <b>{low_share:.1f}%</b>, a net margin of "
-        f"<b>{net:+.1f} pp</b>. <b>Interpretation:</b> overall sentiment is "
-        f"strongly positive, so the business is not broadly failing. "
-        f"{shape} The detractor tail is where the improvement opportunity "
-        f"sits, and the next charts test whether delivery performance "
-        f"explains it.",
-        scope="All years · All states (unfiltered baseline)",
+        f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ while only "
+        f"<b>{s1:.1f}%</b> are 1★ — promoters (4–5★) hold "
+        f"<b>{high_share:.1f}%</b> vs detractors (1–2★) at "
+        f"<b>{low_share:.1f}%</b>."
+    )
+
+
+def chart_review_volume_by_year(year: str, states: tuple[str, ...]) -> None:
+    st.markdown("### Review Volume Share by Year")
+    df = _reviews_with_order_scope(year, states)
+    if df is not None and not df.empty:
+        df = df[df["review_score"].notna() & df["year"].notna()]
+    if df is None or df.empty:
+        _no_data(); return
+
+    counts = df.groupby("year").size().sort_index()
+    if counts.empty:
+        _no_data(); return
+    total = int(counts.sum())
+    if total == 0:
+        _no_data(); return
+    pct = 100.0 * counts / total
+
+    colors = [
+        PALETTE.warn if y in PARTIAL_YEARS else PALETTE.primary
+        for y in counts.index
+    ]
+
+    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
+    bars = ax.barh(counts.index.astype(str), counts.values, color=colors,
+                   edgecolor=PALETTE.white, linewidth=1.4)
+    ax.set_title("Review Volume Share by Year", pad=14, loc="left")
+    ax.set_xlabel("Number of reviews")
+    ax.xaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{int(v):,}"))
+    ax.invert_yaxis()
+    _style_axes(ax)
+    ax.grid(axis="x", color=PALETTE.slate_200, linewidth=0.7)
+    ax.grid(axis="y", visible=False)
+    for b, n, p, y in zip(bars, counts.values, pct.values, counts.index):
+        if y in PARTIAL_YEARS:
+            label = f"⚠️ PARTIAL YEAR\n{p:.1f}% ({int(n):,})"
+            text_color = PALETTE.danger
+        else:
+            label = f"{p:.1f}%  ({int(n):,})"
+            text_color = PALETTE.slate_700
+        ax.text(b.get_width() + total * 0.01,
+                b.get_y() + b.get_height() / 2, label,
+                va="center", fontsize=10, color=text_color,
+                fontweight="bold")
+    _finish(fig)
+
+    if any(y in PARTIAL_YEARS for y in counts.index):
+        st.caption(
+            "⚠️ **Note on 2016 and 2018:** 2016 only contains 3 active "
+            "months (Sep–Dec) and 2018 ends on 17 October. These are "
+            "**not full calendar years**, so their review volume appears "
+            "artificially low."
+        )
+
+    biggest = counts.idxmax(); smallest = counts.idxmin()
+    top2_share = float(pct.sort_values(ascending=False).head(2).sum())
+    _insight(
+        year, states,
+        f"<b>{biggest}</b> dominates at {int(counts[biggest]):,} reviews "
+        f"(<b>{pct[biggest]:.1f}%</b>); <b>{smallest}</b> trails at "
+        f"{int(counts[smallest]):,} (<b>{pct[smallest]:.1f}%</b>). "
+        f"Top-2 years cover <b>{top2_share:.1f}%</b> of reviews."
     )
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.x  PUNCTUALITY  (Q6, Q9) — lives in the Detail & Method tab
+# §6.x  PUNCTUALITY  (Q6, Q9)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _late_severity(days_late: pd.Series) -> pd.Series:
-    """Bucket delivery lateness in days; any positive fraction counts as late."""
     out = pd.Series("On Time", index=days_late.index, dtype="object")
-    late = days_late > 0
-    out = out.mask(late & days_late.le(3), "Slightly Late")
-    out = out.mask(days_late.gt(3) & days_late.le(7), "Moderately Late")
-    out = out.mask(days_late.gt(7), "Severely Late")
+    out = out.mask(days_late.between(1, 3), "Slightly Late")
+    out = out.mask(days_late.between(4, 7), "Moderately Late")
+    out = out.mask(days_late >= 8, "Severely Late")
     return out
 
 
@@ -913,10 +984,9 @@ def chart_punctuality_vs_satisfaction(year: str,
                  if d == d else "n/a (scipy unavailable)")
         ci_txt = (f"[{ci_lo:+.2f}, {ci_hi:+.2f}]"
                   if ci_lo == ci_lo else "n/a")
-        t_txt = f"{t_stat:.2f}" if t_stat == t_stat else "n/a"
         verdict = (
             f"<b>On-Time − Late gap: {diff:+.2f}★</b> "
-            f"(95% CI {ci_txt}) · Welch t = {t_txt} · "
+            f"(95% CI {ci_txt}) · Welch t = {t_stat:.2f} · "
             f"Cohen's d = {d_txt} · n_on={n_on:,}, n_late={n_late:,} · {sig}"
         )
     else:
@@ -994,16 +1064,12 @@ def chart_punctuality_vs_satisfaction(year: str,
     late_share = float(grp.loc[grp.index != "On Time", "tier_share"].sum()) \
         if len(grp) else 0.0
     noisy = int((~grp["reliable"]).sum()) if len(grp) else 0
-    noisy_txt = (f" {noisy} tier(s) flagged ⚠️ (n &lt; {PUNCT_MIN_N_TIER}) "
-                 f"— read those bars with caution."
+    noisy_txt = (f" {noisy} tier(s) flagged ⚠️ (n < {PUNCT_MIN_N_TIER})."
                  if noisy else "")
     top_det = grp["detractor_rate"].idxmax() if len(grp) else grp.index[0]
     on_time_dr = (float(grp.loc["On Time", "detractor_rate"] * 100)
                   if "On Time" in grp.index else 0.0)
     top_dr = float(grp.loc[top_det, "detractor_rate"] * 100) if len(grp) else 0.0
-    dr_mult = (top_dr / on_time_dr) if on_time_dr > 0 else float("nan")
-    mult_txt = (f" — <b>{dr_mult:.1f}×</b> the on-time rate"
-                if dr_mult == dr_mult else "")
 
     _insight(
         year, states,
@@ -1011,21 +1077,12 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"(n={q6['n_on']:,}) vs late <b>{q6['late']:.2f}★</b> "
         f"(n={q6['n_late']:,}) — gap <b>{q6_gap_txt}</b> "
         f"(<b>{q6_gap_pct}</b>) across <b>{late_share:.1f}%</b> of orders "
-        f"that arrived late. The 1–2★ share rises from "
-        f"<b>{on_time_dr:.1f}%</b> (on time) to <b>{top_dr:.1f}%</b> at "
-        f"<i>{top_det}</i>{mult_txt}. <b>Interpretation:</b> satisfaction "
-        f"falls as lateness grows — a dose–response pattern — so the "
-        f"penalty is driven by <i>how badly</i> the promise is missed, not "
-        f"merely by whether it is missed. This makes delivery punctuality "
-        f"the strongest lever in the data, although it is an association, "
-        f"not proof of causation (see limitation L1).{noisy_txt}"
+        f"that arrived late. 1–2★ share jumps from "
+        f"<b>{on_time_dr:.1f}%</b> to <b>{top_dr:.1f}%</b> at peak "
+        f"severity.{noisy_txt}"
     )
     _partial_note(year)
 
-
-# ════════════════════════════════════════════════════════════════════════════
-# §6.w  DELIVERY-TIME BUCKETS  (Customer Satisfaction tab)
-# ════════════════════════════════════════════════════════════════════════════
 
 def chart_satisfaction_by_delivery_bucket(year: str,
                                           states: tuple[str, ...]) -> None:
@@ -1048,7 +1105,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
         _no_data(); return
 
     bins = [0, 5, 10, 20, 30, float("inf")]
-    labels = ["0-5 days", "6-10 days", "11-20 days", "21-30 days", "30+ days"]
+    labels = ["0–5 days", ">5–10 days", ">10–20 days", ">20–30 days", ">30 days"]
     df = df.copy()
     try:
         df["bucket"] = pd.cut(df["delivery_days"], bins=bins,
@@ -1064,7 +1121,7 @@ def chart_satisfaction_by_delivery_bucket(year: str,
         reviews=("review_score", "count"),
         avg_score=("review_score", "mean"),
     ).reset_index()
-    grp = grp[grp["orders"] > 0].reset_index(drop=True)
+    grp = grp[grp["orders"] > 0]
     if grp.empty:
         _no_data(); return
 
@@ -1075,11 +1132,11 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     sel_avg = float((grp["avg_score"] * grp["orders"]).sum() / total_orders)
 
     bucket_palette = {
-        "0-5 days":   PALETTE.success_light,
-        "6-10 days":  PALETTE.success,
-        "11-20 days": PALETTE.warn_light,
-        "21-30 days": PALETTE.warn,
-        "30+ days":   PALETTE.danger,
+        "0–5 days":    PALETTE.success_light,
+        ">5–10 days":  PALETTE.success,
+        ">10–20 days": PALETTE.warn_light,
+        ">20–30 days": PALETTE.warn,
+        ">30 days":    PALETTE.danger,
     }
     colors = [bucket_palette.get(str(b), PALETTE.slate_400)
               for b in grp["bucket"]]
@@ -1105,55 +1162,28 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     _finish(fig)
 
     if len(grp) == 1:
-        text = (
-            f"All delivered orders sit in the <b>{grp.iloc[0]['bucket']}</b> "
-            f"bucket (<b>100.0%</b>, {grp.iloc[0]['avg_score']:.2f}★). "
-            f"<b>Interpretation:</b> with a single bucket there is no "
-            f"delivery-time contrast to read — widen the filters to see how "
-            f"satisfaction changes with waiting time."
-        )
+        text = (f"All delivered orders sit in the "
+                f"<b>{grp.iloc[0]['bucket']}</b> bucket "
+                f"(<b>100.0%</b>, {grp.iloc[0]['avg_score']:.2f}★).")
     else:
         first, last = grp.iloc[0], grp.iloc[-1]
         below = grp.loc[grp["avg_score"] < sel_avg]
         below_share = float(below["share"].sum())
         below_txt = (
-            f"<b>{below_share:.1f}%</b> of orders sit in buckets below the "
-            f"average ({', '.join(map(str, below['bucket']))})."
+            f"<b>{below_share:.1f}%</b> of orders sit in buckets below avg "
+            f"({', '.join(map(str, below['bucket']))})."
             if not below.empty else
             "No bucket falls below the selection average."
         )
         fast_share = float(grp.loc[grp["bucket"].astype(str).isin(
-            ["0-5 days", "6-10 days"]), "share"].sum())
+            ["0–5 days", ">5–10 days"]), "share"].sum())
         slow_share = float(grp.loc[grp["bucket"].astype(str).isin(
-            ["21-30 days", "30+ days"]), "share"].sum())
-
-        steps = grp["avg_score"].diff()
-        cliff_txt = ""
-        if steps.notna().any():
-            pos = int(steps.reset_index(drop=True).idxmin())
-            drop = float(steps.iloc[pos])
-            if pos >= 1 and drop < 0:
-                cliff_txt = (
-                    f" The steepest single step is "
-                    f"<b>{grp.iloc[pos - 1]['bucket']} → "
-                    f"{grp.iloc[pos]['bucket']}</b> ({drop:+.2f}★), the "
-                    f"point at which waiting turns into real dissatisfaction."
-                )
-        trend_word = ("falls steadily"
-                      if first["avg_score"] > last["avg_score"]
-                      else "does not fall with longer waits")
-        text = (
-            f"Scores go from <b>{first['avg_score']:.2f}★</b> "
-            f"({first['bucket']}, <b>{fast_share:.1f}%</b> of orders) to "
-            f"<b>{last['avg_score']:.2f}★</b> ({last['bucket']}, "
-            f"<b>{slow_share:.1f}%</b>). {below_txt}{cliff_txt} "
-            f"<b>Interpretation:</b> satisfaction {trend_word} as delivery "
-            f"time grows, and the decline accelerates in the slowest "
-            f"buckets rather than being linear. Customers tolerate a "
-            f"moderate wait but punish long ones, so the priority is to stop "
-            f"orders drifting into the slow tail — monitor ageing orders "
-            f"and intervene before the steepest step."
-        )
+            [">20–30 days", ">30 days"]), "share"].sum())
+        text = (f"Scores drop <b>{first['avg_score']:.2f}★</b> "
+                f"({first['bucket']}, <b>{fast_share:.1f}%</b> of orders) → "
+                f"<b>{last['avg_score']:.2f}★</b> ({last['bucket']}, "
+                f"<b>{slow_share:.1f}%</b>); satisfaction breaks sharply "
+                f"after 20 days. {below_txt}")
     _insight(year, states, text)
 
 
@@ -1223,42 +1253,25 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
     _finish(fig)
 
     if len(plot_df) == 1:
-        text = (
-            f"<b>{plot_df.iloc[0]['customer_state']}</b> averages "
-            f"{plot_df.iloc[0]['avg_score']:.2f}★ (<b>100.0%</b> of "
-            f"orders). <b>Interpretation:</b> a single state gives no "
-            f"geographic contrast; select more states to compare."
-        )
+        text = (f"<b>{plot_df.iloc[0]['customer_state']}</b> averages "
+                f"{plot_df.iloc[0]['avg_score']:.2f}★ "
+                f"(<b>100.0%</b> of orders).")
     else:
         low, high = plot_df.iloc[0], plot_df.iloc[-1]
         spread = high["avg_score"] - low["avg_score"]
-        spread_ratio = _safe_div(spread, high["avg_score"])
-        spread_pct = 100.0 * spread_ratio if spread_ratio is not None else 0.0
+        spread_pct = (100.0 * _safe_div(spread, high["avg_score"])
+                      if _safe_div(spread, high["avg_score"]) is not None
+                      else 0.0)
         weak = plot_df.loc[plot_df["avg_score"] < 4.10]
         weak_share = float(weak["share"].sum())
-
-        g = query_headline_gap(year, states)
-        compare_txt = ""
-        if g["gap"] is not None and g["gap"] > 0:
-            compare_txt = (
-                f" The state spread is only <b>{100.0 * spread / g['gap']:.0f}%"
-                f"</b> of the on-time↔late gap ({g['gap']:.2f}★), so "
-                f"location matters far less than delivery performance."
-            )
-        text = (
-            f"<b>{low['customer_state']}</b> ({low['avg_score']:.2f}★, "
-            f"{low['share']:.1f}% of orders) anchors the low end and "
-            f"<b>{high['customer_state']}</b> ({high['avg_score']:.2f}★, "
-            f"{high['share']:.1f}%) the high end — a <b>{spread:.2f}★</b> "
-            f"spread (<b>{spread_pct:.1f}%</b>). <b>{weak_share:.1f}%</b> of "
-            f"orders sit in states scoring &lt; 4.10★.{compare_txt} "
-            f"<b>Interpretation:</b> satisfaction is fairly uniform across "
-            f"the biggest markets, so there is no broad regional problem — "
-            f"just a few lagging states (red/amber bars). Those are the "
-            f"candidates for targeted operational review, and the next "
-            f"chart checks whether late deliveries explain their lower "
-            f"scores."
-        )
+        text = (f"<b>{low['customer_state']}</b> "
+                f"({low['avg_score']:.2f}★, {low['share']:.1f}% of orders) "
+                f"anchors the low end and <b>{high['customer_state']}</b> "
+                f"({high['avg_score']:.2f}★, {high['share']:.1f}%) the high "
+                f"end — a {spread:.2f}★ spread (<b>{spread_pct:.1f}%</b>) "
+                f"dwarfed by the on-time↔late gap. "
+                f"<b>{weak_share:.1f}%</b> of orders sit in states scoring "
+                f"&lt; 4.10★.")
     _insight(year, states, text)
 
 
@@ -1311,29 +1324,20 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
                 color=PALETTE.danger, fontweight="bold")
     _finish(fig)
 
-    overall_ratio = _safe_div(grp["late"].sum(), grp["delivered"].sum())
-    overall_pct = 100.0 * overall_ratio if overall_ratio is not None else 0.0
+    overall_pct = (100.0 * _safe_div(grp["late"].sum(),
+                                     grp["delivered"].sum()) or 0.0)
     worst = grp.loc[grp["late_pct"].idxmax()]
     best  = grp.loc[grp["late_pct"].idxmin()]
     worst_mx = (worst["late_pct"] / overall_pct
                 if overall_pct else float("nan"))
-    mx_txt = (f"(<b>{worst_mx:.1f}×</b> group avg) "
-              if worst_mx == worst_mx else "")
     _insight(
         year, states,
         f"Top-5 states average <b>{overall_pct:.1f}%</b> late; "
         f"<b>{worst['customer_state']}</b> is worst at "
-        f"<b>{worst['late_pct']:.1f}%</b> {mx_txt}and "
-        f"<b>{best['customer_state']}</b> best at "
+        f"<b>{worst['late_pct']:.1f}%</b> (<b>{worst_mx:.1f}×</b> group avg) "
+        f"and <b>{best['customer_state']}</b> best at "
         f"<b>{best['late_pct']:.1f}%</b> — a "
-        f"<b>{worst['late_pct'] - best['late_pct']:.1f} pp</b> spread. "
-        f"<b>Interpretation:</b> the red bars are small next to the green "
-        f"ones everywhere, so most orders arrive on time, but lateness is "
-        f"not evenly spread — <b>{worst['customer_state']}</b> misses its "
-        f"promise much more often than {best['customer_state']}. Compare "
-        f"this with the state score chart: a state that is both late-heavy "
-        f"and low-scoring supports delivery as the cause of lower "
-        f"satisfaction, and is where a logistics fix pays back first."
+        f"<b>{worst['late_pct'] - best['late_pct']:.1f} pp</b> spread."
     )
 
 
@@ -1356,8 +1360,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
                  avg_score=("review_score", "mean"),
              )
              .reset_index()
-             .sort_values("month")
-             .reset_index(drop=True))
+             .sort_values("month"))
     if grp.empty:
         _no_data(); return
 
@@ -1401,43 +1404,30 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     _finish(fig)
 
     noisy = int((grp["reviews"] < CONFIG.min_reviews_per_month).sum())
-    noisy_ratio = _safe_div(noisy, len(grp))
-    noisy_pct = 100.0 * noisy_ratio if noisy_ratio is not None else 0.0
+    noisy_pct = (100.0 * _safe_div(noisy, len(grp))
+                 if _safe_div(noisy, len(grp)) is not None else 0.0)
     note = (
-        f" <b>{noisy_pct:.1f}%</b> of months have &lt; "
-        f"{CONFIG.min_reviews_per_month} reviews, so their averages are "
-        f"noisy and should not be over-read."
+        f" <b>{noisy_pct:.1f}%</b> of months have < "
+        f"{CONFIG.min_reviews_per_month} reviews — noisy averages."
     ) if noisy else ""
     swing = grp.loc[high_i, "avg_score"] - grp.loc[low_i, "avg_score"]
-    swing_ratio = _safe_div(swing, grp.loc[high_i, "avg_score"])
-    swing_pct = 100.0 * swing_ratio if swing_ratio is not None else 0.0
-
-    g = query_headline_gap(year, states)
-    cmp_txt = ""
-    if g["gap"] is not None and g["gap"] > 0:
-        rel = "smaller" if swing < g["gap"] else "larger"
-        cmp_txt = (f" The swing is {rel} than the on-time↔late gap "
-                   f"({g['gap']:.2f}★).")
+    swing_pct = (100.0 * _safe_div(swing, grp.loc[high_i, "avg_score"])
+                 if _safe_div(swing, grp.loc[high_i, "avg_score"]) is not None
+                 else 0.0)
     _insight(
         year, states,
         f"Lowest <b>{grp.loc[low_i,'month']}</b> "
         f"({grp.loc[low_i,'avg_score']:.2f}★) vs highest "
         f"<b>{grp.loc[high_i,'month']}</b> "
         f"({grp.loc[high_i,'avg_score']:.2f}★) — a "
-        f"<b>{swing:.2f}★</b> (<b>{swing_pct:.1f}%</b>) range across the "
-        f"period.{cmp_txt} <b>Interpretation:</b> satisfaction moves over "
-        f"time rather than holding flat, and the lowest point marks a "
-        f"month where the customer experience visibly deteriorated. Sharp "
-        f"dips usually coincide with demand peaks or logistics disruption "
-        f"stressing delivery (consistent with the delivery finding, though "
-        f"this chart alone cannot prove it) — check late-delivery rates "
-        f"for that month before drawing conclusions.{note}"
+        f"<b>{swing:.2f}★</b> (<b>{swing_pct:.1f}%</b>) seasonal swing "
+        f"that stays small next to the late-delivery gap.{note}"
     )
     _partial_note(year)
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.zz  MAP  —  Brazil Map · Reviews
+# §6.zz  MAP
 # ════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
@@ -1506,21 +1496,16 @@ def _plot_geo(ax, geometry, facecolor,
 
 
 def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
-    st.markdown("### Brazil Map · Reviews")
-    st.caption(
-        "Number of reviews per state and its share of all reviews in the "
-        "selected year. If states are selected, only those are coloured."
-    )
-    # Pull every state for the chosen year so shares stay comparable;
-    # the State filter only controls which states are highlighted.
-    df = _reviews_with_order_scope(year, ())
-    if df is not None and not df.empty:
-        df = df[df["review_score"].notna() & df["customer_state"].notna()]
+    st.markdown("### Brazil Map · Delivered Orders")
+    df = apply_filters(get_model(), year, list(states))
     if df is None or df.empty:
-        _no_data("No state-level review data for this year."); return
-    counts = df.groupby("customer_state").size()
+        _no_data(); return
+    df = df[df["is_delivered"] & df["customer_state"].notna()]
+    if df.empty:
+        _no_data("No state-level data for this year."); return
+    counts = df.groupby("customer_state")["order_id"].nunique()
     if counts.empty:
-        _no_data("No state-level review data for this year."); return
+        _no_data("No state-level data for this year."); return
 
     geojson = load_brazil_geojson()
     if not geojson:
@@ -1533,24 +1518,24 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         return
 
     filter_active = bool(states)
-    reviews_by_state = counts.to_dict()
-    total_reviews = float(sum(reviews_by_state.values()))
-    if total_reviews <= 0:
+    orders_by_state = counts.to_dict()
+    total_orders = float(sum(orders_by_state.values()))
+    if total_orders <= 0:
         _no_data(); return
 
-    hi = float(max(reviews_by_state.values())) * 1.05
+    hi = float(max(orders_by_state.values())) * 1.05
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
     cmap = plt.get_cmap("YlGnBu")
 
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     ax.set_axis_off()
-    ax.set_title(f"Reviews by State — {scope_label(year, states)}",
+    ax.set_title(f"Delivered Orders by State — {scope_label(year, states)}",
                  fontsize=12, fontweight="bold",
                  color=PALETTE.ink_soft, pad=12, loc="left")
 
     for _, row in gdf.iterrows():
         st_code = row["state"]
-        n = reviews_by_state.get(st_code)
+        n = orders_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
         face = cmap(norm(n)) if (n is not None and in_scope) \
             else PALETTE.slate_200
@@ -1559,7 +1544,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     for _, row in gdf.iterrows():
         st_code = row["state"]
         geom = row["geometry"]
-        n = reviews_by_state.get(st_code)
+        n = orders_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
         try:
             gtype, coords = geom.get("type"), geom.get("coordinates")
@@ -1577,8 +1562,8 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
             cy = sum(pt[1] for pt in ring) / len(ring)
         except Exception:
             continue
-        share = (100.0 * n / total_reviews
-                 if (n is not None and total_reviews) else None)
+        share = (100.0 * n / total_orders
+                 if (n is not None and total_orders) else None)
         if n is not None and in_scope:
             label = (f"{st_code}\n{int(n):,}\n{share:.1f}%"
                      if share is not None else f"{st_code}\n{int(n):,}")
@@ -1599,40 +1584,35 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="horizontal",
                         fraction=0.04, pad=0.04, shrink=0.7)
-    cbar.set_label("Number of reviews", fontsize=10,
+    cbar.set_label("Delivered orders", fontsize=10,
                    color=PALETTE.slate_500)
     cbar.ax.tick_params(labelsize=9)
     _finish(fig)
 
-    in_scope_pairs = [(s, v) for s, v in reviews_by_state.items()
+    in_scope_pairs = [(s, v) for s, v in orders_by_state.items()
                       if (not filter_active) or (s in states)]
     if not in_scope_pairs:
         _insight(year, states, "No states match the current filter.")
         return
     lo_s, lo_v = min(in_scope_pairs, key=lambda x: x[1])
     hi_s, hi_v = max(in_scope_pairs, key=lambda x: x[1])
-    hi_pct = 100.0 * (_safe_div(hi_v, total_reviews) or 0.0)
-    lo_pct = 100.0 * (_safe_div(lo_v, total_reviews) or 0.0)
+    hi_pct = (100.0 * _safe_div(hi_v, total_orders)
+              if _safe_div(hi_v, total_orders) is not None else 0.0)
+    lo_pct = (100.0 * _safe_div(lo_v, total_orders)
+              if _safe_div(lo_v, total_orders) is not None else 0.0)
     top3 = sorted(in_scope_pairs, key=lambda x: x[1], reverse=True)[:3]
-    top3_pct = 100.0 * (_safe_div(sum(v for _, v in top3), total_reviews)
-                        or 0.0)
-    top3_names = ", ".join(s for s, _ in top3)
-    mode = ("Only the selected states are coloured; the rest are greyed."
+    top3_pct = (100.0 * _safe_div(sum(v for _, v in top3), total_orders)
+                if _safe_div(sum(v for _, v in top3), total_orders) is not None
+                else 0.0)
+    mode = ("Counts reflect the selected states; unselected states are greyed."
             if filter_active else
-            "All 27 states are coloured by review count.")
+            "All 27 states are shown by delivered-order count.")
     _insight(
         year, states,
-        f"<b>{hi_s}</b> has the most reviews ({int(hi_v):,}, "
-        f"<b>{hi_pct:.1f}%</b> of the total) and <b>{lo_s}</b> the fewest "
-        f"({int(lo_v):,}, <b>{lo_pct:.1f}%</b>). The top 3 "
-        f"(<b>{top3_names}</b>) hold <b>{top3_pct:.1f}%</b> of all "
-        f"reviews. {mode} <b>Interpretation:</b> customer feedback is "
-        f"heavily concentrated in a few large markets, which means their "
-        f"experience largely sets the national average and a delivery "
-        f"improvement there moves overall satisfaction the most. "
-        f"Conversely, low-volume states rest on few reviews, so their "
-        f"averages are volatile — treat them as signals to monitor, not "
-        f"as firm conclusions."
+        f"<b>{hi_s}</b> carries the largest volume ({int(hi_v):,}, "
+        f"<b>{hi_pct:.1f}%</b>); <b>{lo_s}</b> the smallest "
+        f"({int(lo_v):,}, <b>{lo_pct:.1f}%</b>). Top-3 states concentrate "
+        f"<b>{top3_pct:.1f}%</b> of deliveries. {mode}"
     )
 
 
@@ -1737,7 +1717,7 @@ def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
             <p style="margin:0;">
               Late deliveries cost <b>{g['gap']:.2f}★</b>
               ({gap_pct_txt}) — the strongest satisfaction driver. See the
-              Detail &amp; Method tab for the evidence.
+              Customer Satisfaction tab for the evidence.
             </p>
           </div>
         </div>
@@ -1890,9 +1870,9 @@ GLOBAL_CSS: Final[str] = """
 
 <style>
   :root {
-    --brand:        #0F766E;
-    --brand-light:  #99F6E4;
-    --brand-dark:   #115E59;
+    --brand:        #6366F1;
+    --brand-light:  #A5B4FC;
+    --brand-dark:   #4338CA;
     --accent:       #F97316;
     --accent-light: #FDBA74;
     --success:      #10B981;
@@ -1917,9 +1897,9 @@ GLOBAL_CSS: Final[str] = """
     --fs-h1:      clamp(1.35rem, 1.1rem + 1vw, 1.85rem);
     --fs-h2:      clamp(1.15rem, 1.05rem + 0.5vw, 1.4rem);
     --fs-h3:      clamp(1rem, 0.95rem + 0.3vw, 1.15rem);
-    --fs-body:    0.95rem;
-    --fs-small:   0.82rem;
-    --fs-micro:   0.72rem;
+    --fs-body:    1rem;
+    --fs-small:   0.875rem;
+    --fs-micro:   0.75rem;
     --radius-sm:  6px;
     --radius-md:  10px;
     --radius-lg:  14px;
@@ -1928,7 +1908,7 @@ GLOBAL_CSS: Final[str] = """
                   0 1px 3px rgba(15,23,42,0.06);
     --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
                   0 10px 24px rgba(15,23,42,0.06);
-    --shadow-brand: 0 4px 12px rgba(15,118,110,0.20);
+    --shadow-brand: 0 4px 12px rgba(99,102,241,0.22);
   }
 
   html, body, [class*="css"], .stApp {
@@ -1953,12 +1933,12 @@ GLOBAL_CSS: Final[str] = """
     display: flex;
     align-items: center;
     gap: var(--s6);
-    background: linear-gradient(135deg, #E6FFFB 0%, #FFFFFF 58%, #EFF6FF 100%);
+    background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 8px 32px rgba(15,118,110,0.10);
+    box-shadow: 0 8px 32px rgba(99,102,241,0.10);
   }
   .app-hero-logo {
     flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
@@ -2014,11 +1994,11 @@ GLOBAL_CSS: Final[str] = """
   }
 
   .block-container {
-    padding-top: var(--s5) !important;
-    padding-bottom: var(--s8) !important;
-    max-width: 1480px;
-    padding-left: var(--s5) !important;
-    padding-right: var(--s5) !important;
+    padding-top: 28px !important;
+    padding-bottom: 64px !important;
+    max-width: 1520px;
+    padding-left: clamp(16px, 2.2vw, 32px) !important;
+    padding-right: clamp(16px, 2.2vw, 32px) !important;
   }
 
   section[data-testid="stSidebar"] {
@@ -2147,7 +2127,7 @@ GLOBAL_CSS: Final[str] = """
   }
   [data-testid="stMetricLabel"] {
     color: var(--slate-500) !important;
-    font-size: 0.72rem !important;
+    font-size: 0.78rem !important;
     font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -2429,6 +2409,21 @@ GLOBAL_CSS: Final[str] = """
   }
   .stPyplot { margin-top: var(--s1); }
 
+  /* Visible focus states improve keyboard accessibility. */
+  button:focus-visible, a:focus-visible, input:focus-visible,
+  [role="radio"]:focus-visible, [role="combobox"]:focus-visible {
+    outline: 3px solid var(--accent) !important;
+    outline-offset: 2px !important;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
   hr { border-color: var(--slate-200); margin: var(--s5) 0; }
 
   @media (max-width: 1100px) {
@@ -2455,61 +2450,6 @@ GLOBAL_CSS: Final[str] = """
 
 def _apply_global_style() -> None:
     st.markdown(GLOBAL_CSS, unsafe_allow_html=True)
-    # Small, centralized overrides: consistent spacing, readable typography,
-    # visible keyboard focus, and responsive controls across Streamlit versions.
-    st.markdown(
-        """
-        <style>
-          :root {
-            --brand: #0F766E !important;
-            --brand-light: #99F6E4 !important;
-            --brand-dark: #115E59 !important;
-            --shadow-brand: 0 4px 12px rgba(15,118,110,.20) !important;
-          }
-          .block-container {
-            max-width: 1600px;
-            padding-top: 1.75rem !important;
-            padding-bottom: 2.5rem !important;
-            padding-left: clamp(1rem, 2.5vw, 2.5rem) !important;
-            padding-right: clamp(1rem, 2.5vw, 2.5rem) !important;
-          }
-          [data-testid="stMetric"] {
-            background: #FFFFFF;
-            border: 1px solid #E2E8F0;
-            border-radius: 14px;
-            padding: 1rem 1.1rem;
-            box-shadow: 0 2px 8px rgba(15,23,42,.035);
-          }
-          [data-testid="stMetricLabel"] p {font-size: .86rem !important; font-weight: 600;}
-          [data-testid="stMetricValue"] {font-size: clamp(1.35rem, 1.1rem + .7vw, 2rem) !important;}
-          [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"] {min-width: 0;}
-          div[data-testid="stButton"] > button,
-          div[data-testid="stDownloadButton"] > button {
-            border-radius: 10px; font-weight: 650; min-height: 2.65rem;
-            transition: transform .12s ease, box-shadow .12s ease;
-          }
-          div[data-testid="stButton"] > button:hover,
-          div[data-testid="stDownloadButton"] > button:hover {
-            transform: translateY(-1px); box-shadow: 0 4px 12px rgba(15,118,110,.15);
-          }
-          button:focus-visible, input:focus-visible, textarea:focus-visible {
-            outline: 3px solid #0F766E !important; outline-offset: 2px !important;
-          }
-          [data-testid="stSidebar"] {border-right: 1px solid #E2E8F0;}
-          [data-testid="stSidebar"] .block-container {padding-top: 1.5rem !important;}
-          [data-testid="stDataFrame"] {max-width: 100%;}
-          @media (max-width: 768px) {
-            .block-container {padding-top: 1rem !important;}
-            [data-testid="stMetric"] {padding: .8rem;}
-            [data-testid="stMetricValue"] {font-size: 1.35rem !important;}
-          }
-          @media (prefers-reduced-motion: reduce) {
-            *, *::before, *::after {transition-duration: .01ms !important; animation-duration: .01ms !important;}
-          }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
     try:
         mpl.rcParams.update({
             "figure.facecolor":   "#FFFFFF",
@@ -2571,9 +2511,8 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
     st.sidebar.divider()
     st.sidebar.subheader("🎛️ Filters")
     st.sidebar.caption(
-        "Both filters apply to **every KPI and chart** except the "
-        "*Review Score Distribution*, which always shows the whole "
-        "dataset. Set both to *All* to reproduce the reference values."
+        "Both filters apply to **every KPI and chart**. "
+        "Set both to *All* to reproduce the reference values."
     )
 
     def _reset_filters() -> None:
@@ -2636,7 +2575,7 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
         f"| Total Orders | {REF['total_orders']:,} |\n"
         f"| Delivered | {REF['delivered_orders']:,} |\n"
         f"| Avg Review | {REF['avg_review_score']:.2f} |\n"
-        f"| Late | {REF['late_deliveries']:,} |\n"
+        f"| Late / missing date | {REF['late_deliveries']:,} |\n"
         f"| Avg Delivery Days | {REF['avg_delivery_days']:.2f} |\n"
         f"| Q6 On Time n | {REF['q6_on_time_orders']:,} |\n"
         f"| Q6 Late n | {REF['q6_late_orders']:,} |"
@@ -2652,8 +2591,8 @@ def render_overview(year: str, states: tuple[str, ...],
                     filter_active: bool) -> None:
     st.markdown("## 📈 Overview")
     st.markdown(
-        "The shape of the business across the current selection — volume "
-        "and sentiment at a glance."
+        "The shape of the business across the current selection — volume, "
+        "sentiment, and year contribution at a glance."
     )
 
     if is_partial_year(year):
@@ -2697,22 +2636,20 @@ def render_overview(year: str, states: tuple[str, ...],
         f"{k['late_pct']:.1f}% of delivered"
         if k["late_pct"] is not None else None
     )
-    c4.metric("Late Deliveries", fmt_int(k["late_deliveries"]),
+    c4.metric("Late / Missing Date", fmt_int(k["late_deliveries"]),
               delta=late_delta, delta_color="inverse")
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
     if filter_active:
         st.info(
-            f"Active filter — **{scope_label(year, states)}**. The KPIs "
-            "above respond to it; the Review Score Distribution below does "
-            "not. Set both filters to All to reproduce the sidebar "
-            "reference values."
+            f"Active filter — **{scope_label(year, states)}**. "
+            "Set both filters to All to reproduce the sidebar reference values."
         )
 
     render_headline_strip(year, states)
 
-    # Not filterable by design.
-    _chart_card(chart_review_distribution)
+    _chart_card(chart_review_distribution, year, states)
+    _chart_card(chart_review_volume_by_year, year, states)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2734,6 +2671,7 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     st.divider()
 
+    _chart_card(chart_punctuality_vs_satisfaction, year, states)
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
 
     # Geographic view — Q4 then Q5 (stacked)
@@ -2751,14 +2689,10 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 def render_detail(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## 🔬 Detail & Method")
     st.markdown(
-        "The statistical evidence behind the headline finding, followed by "
-        "the limitations that govern how far you can take it — read before "
-        "quoting the numbers in a decision."
+        "The limitations that govern how far you can take these findings — "
+        "read before quoting the numbers in a decision."
     )
 
-    _chart_card(chart_punctuality_vs_satisfaction, year, states)
-
-    st.divider()
     st.markdown("### Limitations")
     info_card(
         "L1 — Association, not causation",
@@ -2801,15 +2735,15 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     )
     info_card(
         "L5 — Delivered ≠ delivered-with-a-date",
-        """<p><b>Q1</b> reports 96,478 delivered orders (any
-        <code>status='delivered'</code> row), but <b>Q5</b>, <b>Q6</b>
-        and <b>Q9</b> add an
-        <code>order_delivered_customer_date IS NOT NULL</code> guard that
-        shrinks the base to <b>95,832</b> delivered orders and
-        <b>7,661</b> late ones. Q1's "late = 7,826" therefore includes
-        <b>165</b> late orders with a NULL delivered date. Both numbers
-        are correct for their queries; the app labels which is
-        which.</p>""",
+        """<p><b>Q1</b> counts <b>96,478</b> rows with
+        <code>status='delivered'</code>. Its operational exception KPI is
+        <b>7,826 late-or-missing-date orders</b>: <b>7,661</b> have a
+        recorded delivery date later than the estimate, while
+        <b>165</b> have no recorded delivered date. <b>Q5</b>, <b>Q6</b>
+        and <b>Q9</b> require a recorded delivered date and therefore use
+        the narrower base of <b>95,832</b> orders and <b>7,661</b>
+        confirmed late deliveries. Missing dates are not silently treated
+        as confirmed late deliveries in the punctuality comparison.</p>""",
         variant="info", tags=["Q1 vs Q5/Q6", "NULL semantics"],
     )
     info_card(
@@ -2844,7 +2778,7 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         <b>Q2</b> = <code>11.5 / 3.2 / 8.2 / 19.3 / 57.8%</code>.
         <b>Q6</b> = on-time <code>88,171 @ 4.29</code>, late
         <code>7,661 @ 2.57</code>.
-        <b>Q7</b> = <code>7,826 · 9.55 · 189</code>.
+        <b>Q7</b> = <code>7,661 confirmed late · 9.55 days avg · 189 max</code>.
         <b>Q10</b> = <code>99,224 / 98,673 / 551</code>.
         <b>Q11</b> = <code>99,441 / 96,096</code>.
         All verified in the current code; see the <i>Whole-dataset
@@ -2860,18 +2794,22 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
     )
 
     try:
-        frames = load_data()
+        data_dir = _data_dir()
+        frames = load_data(data_dir, _source_fingerprint(data_dir))
         reviews = frames["reviews"]
         customers = frames["customers"]
 
         review_rows = len(reviews)
         distinct_orders = reviews["order_id"].nunique()
         duplicate_rows = review_rows - distinct_orders
-        duplicate_pct = 100.0 * (_safe_div(duplicate_rows, review_rows) or 0.0)
+        duplicate_pct = (100.0 * _safe_div(duplicate_rows, review_rows)
+                         if _safe_div(duplicate_rows, review_rows) is not None
+                         else 0.0)
         customer_rows = len(customers)
         unique_customers = customers["customer_unique_id"].nunique()
-        unique_pct = 100.0 * (_safe_div(unique_customers, customer_rows)
-                              or 0.0)
+        unique_pct = (100.0 * _safe_div(unique_customers, customer_rows)
+                      if _safe_div(unique_customers, customer_rows) is not None
+                      else 0.0)
 
         c1, c2 = st.columns(2, gap="medium")
         with c1:
@@ -2899,18 +2837,25 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         if not late.empty:
             dl = late["days_late"]
             all_delivered = int(model["is_delivered"].sum())
-            late_share = 100.0 * (_safe_div(len(late), all_delivered) or 0.0)
-            st.markdown("**Days late when late (Q7, whole dataset)**")
+            late_share = (100.0 * _safe_div(len(late), all_delivered)
+                          if _safe_div(len(late), all_delivered) is not None
+                          else 0.0)
+            missing_delivery_date = int((
+                model["order_status"].eq("delivered")
+                & model["order_delivered_customer_date"].isna()
+            ).sum())
+            st.markdown("**Confirmed late deliveries and missing-date records (whole dataset)**")
             _st_dataframe(pd.DataFrame([{
-                "late_orders": len(late),
+                "confirmed_late_orders": len(late),
+                "delivered_missing_date": missing_delivery_date,
                 "late_share_of_delivered": f"{late_share:.1f}%",
                 "avg_days_late": round(float(dl.mean()), 2),
                 "worst_days_late": round(float(dl.max()), 2),
             }]))
             st.caption(
-                f"When late, orders run **{dl.mean():.2f} days past "
+                f"Among confirmed late deliveries with a recorded date, orders run **{dl.mean():.2f} days past "
                 f"estimate** on average; the worst case is "
-                f"**{dl.max():.1f} days**. Late orders are "
+                f"**{dl.max():.1f} days**. There are **{missing_delivery_date:,}** delivered-status records with no delivered date. Confirmed late orders are "
                 f"**{late_share:.1f}%** of all delivered orders."
             )
     except Exception as exc:
@@ -3020,19 +2965,6 @@ def render_recommendations() -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def main() -> None:
-    st.set_page_config(
-        page_title="Customer Satisfaction · Olist",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="auto",
-        menu_items={
-            "About": (
-                "**Customer Satisfaction Dashboard**  \n"
-                "PORA Academy Cohort 7 — Group 1 Capstone  \n"
-                "Built with Streamlit · Matplotlib · pandas"
-            ),
-        },
-    )
     _apply_global_style()
 
     st.session_state.setdefault("filter_year", "All")
@@ -3040,7 +2972,8 @@ def main() -> None:
     st.session_state.setdefault("active_tab", NAV_TABS[0])
 
     try:
-        load_data()
+        data_dir = _data_dir()
+        load_data(data_dir, _source_fingerprint(data_dir))
     except (FileNotFoundError, ValueError) as exc:
         _LOGGER.exception("Data load failed")
         st.error(
@@ -3073,19 +3006,10 @@ def main() -> None:
     avg_live = (
         f"{k_live['avg_review_score']:.2f}★"
         if k_live.get("avg_review_score") is not None
-        else "—"
-    )
-    gap_live = query_headline_gap(year, states)
-    gap_live_text = (
-        f"{gap_live['gap']:.2f}★"
-        if gap_live.get("gap") is not None else "not available for this selection"
-    )
-    gap_live_pct = (
-        f"{gap_live['gap_pct']:.1f}%"
-        if gap_live.get("gap_pct") is not None else "—"
+        else f"{REF['avg_review_score']:.2f}★"
     )
     late_pill = (
-        f"🚚 {k_live['late_pct']:.1f}% late"
+        f"🚚 {k_live['late_pct']:.1f}% late / missing"
         if k_live.get("late_pct") is not None else "🚚 late = ?"
     )
     st.markdown(
@@ -3099,9 +3023,10 @@ def main() -> None:
             </div>
             <p class="app-hero-sub">
               A decision-first view of 99,000+ Olist orders.
-              Delivery punctuality is a key satisfaction signal —
-              late orders trail on-time orders by <b>{gap_live_text}</b>
-              (<b>{gap_live_pct}</b>) in the current selection.
+              Delivery punctuality is the strongest satisfaction driver —
+              late orders lose <b>{REF['star_gap']:.2f}★</b>
+              (<b>{100.0*REF['star_gap']/REF['on_time_score']:.1f}%</b>)
+              on average.
             </p>
             <div class="app-hero-meta">
               <span class="scope-pill">Scope: {scope_label(year, states)}</span>
@@ -3141,8 +3066,8 @@ def main() -> None:
         f"**Reference (filters = All):** Total Orders "
         f"{REF['total_orders']:,} · Delivered {REF['delivered_orders']:,} "
         f"({100.0*REF['delivered_orders']/REF['total_orders']:.1f}%) · "
-        f"Avg Review {REF['avg_review_score']:.2f} · Late "
-        f"{REF['late_deliveries']:,} "
+        f"Avg Review {REF['avg_review_score']:.2f} · Late / missing date "
+        f"{REF['late_deliveries']:,} late / missing-date records "
         f"({100.0*REF['late_deliveries']/REF['delivered_orders']:.1f}% of "
         f"delivered) · Avg Delivery Days {REF['avg_delivery_days']:.2f} · "
         f"Headline gap {REF['star_gap']:.2f}★ "
@@ -3151,9 +3076,8 @@ def main() -> None:
         f"(n={REF['q6_on_time_orders']:,}) vs late "
         f"{REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
         "Every KPI, chart and insight line responds to the Year and State "
-        "filters (except the Review Score Distribution, which is always "
-        "whole-dataset) and reconciles to the verified SQL reference when "
-        "both are set to All."
+        "filters and reconciles to the verified SQL reference when both "
+        "are set to All."
     )
 
 
