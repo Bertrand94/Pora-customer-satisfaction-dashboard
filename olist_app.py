@@ -1446,16 +1446,25 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     ax.plot(grp["month"], grp["avg_score"], marker="o",
             color=PALETTE.primary, linewidth=2.4, markersize=6,
             markerfacecolor=PALETTE.white, markeredgewidth=1.8)
+    
+    # Leave a little padding so the first/last points don't touch the edges
+    ax.margins(x=0.03)
+    
     ax.set_title("Monthly Average Review Score (row-level AVG)",
                  pad=14, loc="left")
     ax.set_xlabel("Month"); ax.set_ylabel("Avg review score (1–5)")
+    
     lo = max(1.0, float(grp["avg_score"].min()) - 0.2)
     hi = min(5.0, float(grp["avg_score"].max()) + 0.2)
     if hi - lo < 0.5:
         mid = (hi + lo) / 2
         lo, hi = max(1.0, mid - 0.25), min(5.0, mid + 0.25)
-    ax.set_ylim(lo, hi)
+    
+    # Add extra space at the top to ensure the annotation doesn't clash
+    ax.set_ylim(lo, hi + 0.4)
     _style_axes(ax)
+
+    # Handle X-axis ticks cleanly
     n = len(grp)
     if n > 12:
         step = max(1, n // 12)
@@ -1464,20 +1473,25 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
         ax.set_xticklabels([grp["month"].iloc[i] for i in ticks],
                            rotation=45, ha="right")
     else:
-        plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(grp["month"], rotation=45, ha="right")
 
     low_i  = grp["avg_score"].idxmin()
     high_i = grp["avg_score"].idxmax()
+    
+    # Highlight the lowest point
     ax.scatter([grp.loc[low_i, "month"]], [grp.loc[low_i, "avg_score"]],
                s=170, color=PALETTE.danger, zorder=5,
                edgecolor=PALETTE.white, linewidth=1.8)
+               
+    # Annotate upwards into the empty space instead of downwards into the axis
     ax.annotate(
         f"Lowest\n{grp.loc[low_i,'month']}\n{grp.loc[low_i,'avg_score']:.2f}",
         xy=(grp.loc[low_i, "month"], grp.loc[low_i, "avg_score"]),
-        xytext=(0, -46), textcoords="offset points",
+        xytext=(0, 30), textcoords="offset points", # Positive Y moves text up
         ha="center",
-        arrowprops=dict(arrowstyle="->", color=PALETTE.slate_500, lw=1.2),
-        fontsize=10, color=PALETTE.danger, fontweight="bold",
+        arrowprops=dict(arrowstyle="->", color=PALETTE.danger, lw=1.2),
+        fontsize=9, color=PALETTE.danger, fontweight="bold",
     )
     _finish(fig)
 
