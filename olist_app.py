@@ -2306,40 +2306,6 @@ GLOBAL_CSS: Final[str] = """
     background: var(--brand-dark) !important;
     transform: translateY(-1px);
   }
-  section[data-testid="stSidebar"] div[role="radiogroup"] {
-    display: flex; flex-direction: column; gap: var(--s1);
-    padding-top: var(--s1);
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label {
-    background: rgba(255,255,255,0.03) !important;
-    border: 1px solid rgba(165,180,252,0.16) !important;
-    border-radius: var(--radius-md) !important;
-    padding: 10px 14px !important;
-    transition: background 0.15s ease, border-color 0.15s ease;
-    cursor: pointer;
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-    background: rgba(165,180,252,0.12) !important;
-    border-color: rgba(165,180,252,0.38) !important;
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
-    display: none !important;
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-    color: #E2E8F0 !important;
-    font-weight: 600 !important;
-    font-size: 0.9rem !important;
-    margin: 0 !important;
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label[data-checked="true"],
-  section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%) !important;
-    border-color: var(--brand-light) !important;
-    box-shadow: 0 2px 12px rgba(99,102,241,0.45);
-  }
-  section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
-    color: #FFFFFF !important; font-weight: 700 !important;
-  }
 
   .sidebar-warning {
     background: rgba(245,158,11,0.14);
@@ -2466,6 +2432,51 @@ GLOBAL_CSS: Final[str] = """
     font-weight: 600 !important;
     color: var(--slate-700) !important;
     font-size: var(--fs-small) !important;
+  }
+
+  /* ── In-page horizontal navigation tabs (replaces sidebar radio) ── */
+  .nav-tabs-anchor + div [role="radiogroup"] {
+    display: flex;
+    gap: var(--s2);
+    flex-wrap: wrap;
+    background: #FFFFFF;
+    border: 1px solid var(--slate-200);
+    border-radius: var(--radius-lg);
+    padding: var(--s2) var(--s3);
+    margin: var(--s2) 0 var(--s4) 0;
+    box-shadow: var(--shadow-sm);
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label {
+    flex: 1 1 auto;
+    justify-content: center;
+    text-align: center;
+    border-radius: var(--radius-md);
+    padding: 10px 16px !important;
+    border: 1px solid transparent;
+    transition: background .15s ease, border-color .15s ease;
+    cursor: pointer;
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label:hover {
+    background: var(--slate-100);
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label > div:first-child {
+    display: none !important;
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label p {
+    color: var(--slate-600) !important;
+    font-weight: 600 !important;
+    font-size: var(--fs-small) !important;
+    margin: 0 !important;
+    white-space: nowrap;
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) {
+    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
+    border-color: var(--brand-light);
+    box-shadow: var(--shadow-brand);
+  }
+  .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) p {
+    color: #FFFFFF !important;
+    font-weight: 700 !important;
   }
 
   .info-card {
@@ -2722,6 +2733,9 @@ GLOBAL_CSS: Final[str] = """
     }
     .exec-summary { flex-direction: column; }
     .exec-summary-badge { min-width: auto; }
+    .nav-tabs-anchor + div [role="radiogroup"] label p {
+      white-space: normal;
+    }
   }
 </style>
 """
@@ -2763,7 +2777,7 @@ def _apply_global_style() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §9  SIDEBAR
+# §9  NAVIGATION + SIDEBAR
 # ════════════════════════════════════════════════════════════════════════════
 
 NAV_TABS: Final[tuple[str, ...]] = (
@@ -2774,20 +2788,32 @@ NAV_TABS: Final[tuple[str, ...]] = (
 )
 
 
-def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
-    st.sidebar.markdown(
-        '<div class="sidebar-nav-label">Navigation</div>',
-        unsafe_allow_html=True,
-    )
-    active_tab = st.sidebar.radio(
+def render_nav_tabs() -> str:
+    """Horizontal in-page navigation (replaces the old sidebar radio).
+
+    Rendered with `st.radio(horizontal=True)` so it works across Streamlit
+    versions; CSS styles it as a segmented tab strip. Returns the active
+    NAV_TABS entry so `main()` can dispatch to the right renderer.
+    """
+    current = st.session_state.get("active_tab", NAV_TABS[0])
+    try:
+        idx = NAV_TABS.index(current)
+    except ValueError:
+        idx = 0
+
+    st.markdown('<div class="nav-tabs-anchor"></div>', unsafe_allow_html=True)
+    selected = st.radio(
         "Navigation",
         options=NAV_TABS,
-        index=0,
-        key="active_tab",
+        index=idx,
+        horizontal=True,
         label_visibility="collapsed",
+        key="active_tab",
     )
+    return selected
 
-    st.sidebar.divider()
+
+def render_sidebar() -> tuple[str, tuple[str, ...]]:
     st.sidebar.subheader("🎛️ Filters")
     st.sidebar.caption(
         "Both filters apply to **every KPI and chart** except the "
@@ -2860,7 +2886,7 @@ def render_sidebar() -> tuple[str, str, tuple[str, ...]]:
         f"| Q6 On Time n | {REF['q6_on_time_orders']:,} |\n"
         f"| Q6 Late n | {REF['q6_late_orders']:,} |"
     )
-    return active_tab, year, states_tuple
+    return year, states_tuple
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3290,11 +3316,11 @@ def main() -> None:
         st.stop()
 
     try:
-        active_tab, year, states = render_sidebar()
+        year, states = render_sidebar()
     except Exception as exc:
         _LOGGER.exception("Sidebar failed")
         st.warning(f"⚠️ Sidebar could not render: {exc}")
-        active_tab, year, states = NAV_TABS[0], "All", ()
+        year, states = "All", ()
 
     try:
         k_live = query_kpis(year, states)
@@ -3346,6 +3372,10 @@ def main() -> None:
         render_executive_summary(year, states)
     except Exception as exc:
         _LOGGER.warning("Exec summary failed: %s", exc)
+
+    # In-page navigation now lives in the dashboard body, right below the
+    # hero banner and executive summary — not in the sidebar.
+    active_tab = render_nav_tabs()
 
     st.write("")
     filter_active = year != "All" or bool(states)
