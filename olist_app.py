@@ -8,13 +8,13 @@ A decision-first dashboard built on 99,441 Olist orders (2016–2018).
 Primary finding: delivery punctuality is the #1 satisfaction lever —
 late orders cost ~1.73★ (40% of the on-time score).
 
-TAB LAYOUT
+TAB LAYOUT (in-page horizontal navigation, not sidebar)
   1. Overview               KPIs + Review Score Distribution (NOT filterable)
   2. Customer Satisfaction  Delivery-time buckets, state scores, on-time by
                             state, monthly trend, Brazil reviews map
   3. Detail & Method        Delivery Punctuality vs Satisfaction (+ what-if),
                             limitations, whole-dataset diagnostics
-  4. Recommendations
+  4. Recommendations        Priority matrix, findings, prioritised actions
 
 DEPLOY
   Local:    streamlit run olist_app.py
@@ -30,11 +30,20 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import math
 import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Final, Sequence
+
+# ────────────────────────────────────────────────────────────────────────────
+# DEPLOYMENT SAFETY: Agg backend MUST be selected before pyplot import.
+# On headless Streamlit Community Cloud, the default interactive backend
+# raises TclError. This is a hard requirement.
+# ────────────────────────────────────────────────────────────────────────────
+import matplotlib
+matplotlib.use("Agg")
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -73,26 +82,26 @@ REF: Final[dict[str, Any]] = {
 
 @dataclass(frozen=True)
 class Palette:
-    # Brand
-    primary:       str = "#6366F1"   # Indigo 500
+    # ── Brand (WCAG AA on white) ─────────────────────────────────────────
+    primary:       str = "#4F46E5"   # Indigo 600 — AA on white
     primary_light: str = "#A5B4FC"
-    primary_dark:  str = "#4338CA"
-    accent:        str = "#F97316"   # Orange 500
+    primary_dark:  str = "#3730A3"
+    accent:        str = "#EA580C"   # Orange 700 — AA on white
     accent_light:  str = "#FDBA74"
-    accent_dark:   str = "#C2410C"
+    accent_dark:   str = "#9A3412"
 
-    # Semantic
-    success:       str = "#10B981"
+    # ── Semantic (WCAG AA on white) ──────────────────────────────────────
+    success:       str = "#059669"   # Emerald 600
     success_light: str = "#6EE7B7"
     success_dark:  str = "#047857"
-    warn:          str = "#F59E0B"
+    warn:          str = "#D97706"   # Amber 600
     warn_light:    str = "#FCD34D"
-    warn_dark:     str = "#B45309"
-    danger:        str = "#EF4444"
-    danger_light:  str = "#FCA5A5"
-    danger_dark:   str = "#B91C1C"
+    warn_dark:     str = "#92400E"
+    danger:        str = "#E11D48"   # Rose 600
+    danger_light:  str = "#FDA4AF"
+    danger_dark:   str = "#9F1239"
 
-    # Neutrals
+    # ── Neutrals ─────────────────────────────────────────────────────────
     ink:           str = "#0F172A"
     ink_soft:      str = "#1E293B"
     slate_700:     str = "#334155"
@@ -141,8 +150,9 @@ class Config:
         "vector-json/master/brazil-states.geojson",
     )
     geojson_timeout_seconds: Final[int] = 20
-    data_cache_ttl_seconds:    Final[int] = 3600
-    geojson_cache_ttl_seconds: Final[int] = 86400
+    # Signature-based keys invalidate on file change; no TTL needed.
+    data_cache_ttl_seconds:    Final[int | None] = None
+    geojson_cache_ttl_seconds: Final[int | None] = None
     min_reviews_per_month:     Final[int] = 30
 
 
@@ -202,12 +212,6 @@ def _safe_mean(series: pd.Series | None) -> float | None:
     return _safe_num(s.mean())
 
 
-def _safe_sum(series: pd.Series | None) -> float:
-    if series is None or len(series) == 0:
-        return 0.0
-    return float(series.fillna(0).sum())
-
-
 def fmt_int(v: Any) -> str:
     n = _safe_num(v)
     return "—" if n is None else f"{int(n):,}"
@@ -264,7 +268,7 @@ def _st_plotly(fig: Any) -> None:
 _FALLBACK_LOGO_SVG: Final[str] = (
     "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcv"
     "MjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tl"
-    "PSIjNjM2NkYxIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3Vu"
+    "PSIjNEY0NkU1IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3Vu"
     "ZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIx"
     "MiIgcj0iMTAiPjwvY2lyY2xlPjxwYXRoIGQ9Ik0xMiA4djgiPjwvcGF0aD48cGF0"
     "aCBkPSJNOCAxMmg4Ij48L3BhdGg+PC9zdmc+"
@@ -299,12 +303,7 @@ def _data_dir() -> str:
 
 
 def _data_signature() -> str:
-    """Fingerprint file metadata so edits invalidate Streamlit's data cache.
-
-    A row-count-only fingerprint can return stale results after a CSV is
-    replaced with another file containing the same number of rows. File size
-    and nanosecond modification time provide a lightweight cache key.
-    """
+    """Fingerprint file metadata so edits invalidate Streamlit's data cache."""
     parts: list[str] = []
     directory = _data_dir()
     for table, filename in sorted(CONFIG.tables.items()):
@@ -320,8 +319,6 @@ def _data_signature() -> str:
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Loading Olist data…")
 def load_data(data_signature: str = "") -> dict[str, pd.DataFrame]:
-    # data_signature is intentionally part of the cache key; the actual
-    # signature is computed by the caller from the four source files.
     data_dir = _data_dir()
     frames: dict[str, pd.DataFrame] = {}
 
@@ -349,8 +346,6 @@ def load_data(data_signature: str = "") -> dict[str, pd.DataFrame]:
                 f"Table {table!r} missing required columns: {missing}"
             )
 
-    # Critical-key checks catch common CSV corruption before joins silently
-    # multiply rows or produce misleading metrics.
     for table, key in (("orders", "order_id"), ("customers", "customer_id")):
         duplicate_count = int(frames[table][key].duplicated().sum())
         if duplicate_count:
@@ -432,8 +427,6 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
 
 def get_model() -> pd.DataFrame:
-    # Include file metadata in both cache layers so a replaced CSV is picked
-    # up on the next rerun, even when its row count has not changed.
     signature = _data_signature()
     return build_model(signature)
 
@@ -611,8 +604,6 @@ def _no_data(msg: str = "No data for the current filters.") -> None:
 
 def _insight(year: str, states: Sequence[str], text: str,
              scope: str | None = None) -> None:
-    """Insight box. `text` may contain HTML. `scope` overrides the scope
-    label (used by the unfiltered Review Score Distribution)."""
     scope_txt = scope if scope is not None else scope_label(year, states)
     st.markdown(
         f"""
@@ -626,6 +617,11 @@ def _insight(year: str, states: Sequence[str], text: str,
         """,
         unsafe_allow_html=True,
     )
+
+
+def _impl(text: str) -> str:
+    return ('<span class="insight-impl"><b>Business implication:</b> '
+            f'{text}</span>')
 
 
 def _style_axes(ax: plt.Axes) -> None:
@@ -671,8 +667,26 @@ def _safe_chart(fn: Callable[..., None], *args, **kwargs) -> None:
         st.warning(f"⚠️ This chart could not render: {exc}")
 
 
-def _chart_card(fn: Callable[..., None], *args, **kwargs) -> None:
+# ────────────────────────────────────────────────────────────────────────────
+# DECISION CHIP: each chart card carries an explicit ACTION / MONITOR / FYI
+# label so viewers immediately know what to do with it.
+# ────────────────────────────────────────────────────────────────────────────
+
+_DECISION_LABELS: Final[dict[str, str]] = {
+    "action":  "ACTION",
+    "monitor": "MONITOR",
+    "fyi":     "FYI",
+}
+
+
+def _chart_card(fn: Callable[..., None], *args,
+                decision: str = "monitor", **kwargs) -> None:
+    label = _DECISION_LABELS.get(decision, "MONITOR")
     with st.container(border=True):
+        st.markdown(
+            f'<span class="chip chip-{decision}">{label}</span>',
+            unsafe_allow_html=True,
+        )
         _safe_chart(fn, *args, **kwargs)
 
 
@@ -681,8 +695,6 @@ def _chart_card(fn: Callable[..., None], *args, **kwargs) -> None:
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_review_distribution() -> None:
-    """Review Score Distribution — intentionally ignores the sidebar
-    filters and always describes the whole dataset."""
     year: str = "All"
     states: tuple[str, ...] = ()
 
@@ -771,7 +783,7 @@ def chart_review_distribution() -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.x  PUNCTUALITY  (Q6, Q9) — lives in the Detail & Method tab
+# §6.x  PUNCTUALITY  (Q6, Q9)
 # ════════════════════════════════════════════════════════════════════════════
 
 def _late_severity(days_late: pd.Series) -> pd.Series:
@@ -1079,7 +1091,7 @@ def chart_punctuality_vs_satisfaction(year: str,
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6.w  DELIVERY-TIME BUCKETS  (Customer Satisfaction tab)
+# §6.w  DELIVERY-TIME BUCKETS
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_satisfaction_by_delivery_bucket(year: str,
@@ -1522,12 +1534,32 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any] | None:
+    """Prefer a vendored local file so the map renders without internet.
+
+    Falls back to remote mirrors only if the local file is missing or invalid.
+    This makes the dashboard deployment-safe on Streamlit Community Cloud.
+    """
+    local_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data", "brazil-states.geojson",
+    )
+    if os.path.isfile(local_path):
+        try:
+            with open(local_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict) and "features" in data:
+                _LOGGER.info("GeoJSON loaded from local file: %s", local_path)
+                return data
+        except Exception as exc:
+            _LOGGER.warning("Local GeoJSON failed (%s): %s", local_path, exc)
+
     for url in CONFIG.geojson_urls:
         try:
             r = requests.get(url, timeout=CONFIG.geojson_timeout_seconds)
             r.raise_for_status()
             data = r.json()
             if isinstance(data, dict) and "features" in data:
+                _LOGGER.info("GeoJSON loaded from mirror: %s", url)
                 return data
         except (requests.RequestException, ValueError) as exc:
             _LOGGER.warning("GeoJSON mirror failed: %s — %s", url, exc)
@@ -1591,8 +1623,6 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         "Number of reviews per state and its share of all reviews in the "
         "selected year. If states are selected, only those are coloured."
     )
-    # Pull every state for the chosen year so shares stay comparable;
-    # the State filter only controls which states are highlighted.
     df = _reviews_with_order_scope(year, ())
     if df is not None and not df.empty:
         df = df[df["review_score"].notna() & df["customer_state"].notna()]
@@ -1906,10 +1936,21 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
     )
 
 
-def _impl(text: str) -> str:
-    """Business-implication line, rendered inside an insight box."""
-    return ('<span class="insight-impl"><b>Business implication:</b> '
-            f'{text}</span>')
+def render_action_bar() -> None:
+    """Compact decision banner that translates the exec summary into action."""
+    st.markdown(
+        """
+        <div class="action-bar">
+          <span class="action-bar-label">Recommended next step</span>
+          <span class="action-bar-body">
+            Prioritise <b>R2 (day‑20 intervention)</b> and
+            <b>R5 (promise reliability)</b> — high impact, low effort.
+            Full evidence in the <b>Recommendations</b> tab.
+          </span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
@@ -2072,7 +2113,7 @@ def render_priority_matrix() -> None:
             items, x="effort", y="impact", text="id",
             size=[14] * len(items),
             color="impact",
-            color_continuous_scale=["#6EE7B7", "#FCD34D", "#FCA5A5"],
+            color_continuous_scale=["#6EE7B7", "#FCD34D", "#FDA4AF"],
             hover_data=["action", "region"],
             range_x=[0.5, 5.5], range_y=[0.5, 5.5],
         )
@@ -2135,17 +2176,18 @@ GLOBAL_CSS: Final[str] = """
 
 <style>
   :root {
-    --brand:        #6366F1;
+    /* WCAG-AA palette */
+    --brand:        #4F46E5;
     --brand-light:  #A5B4FC;
-    --brand-dark:   #4338CA;
-    --accent:       #F97316;
+    --brand-dark:   #3730A3;
+    --accent:       #EA580C;
     --accent-light: #FDBA74;
-    --success:      #10B981;
+    --success:      #059669;
     --success-dk:   #047857;
-    --warn:         #F59E0B;
-    --warn-dk:      #B45309;
-    --danger:       #EF4444;
-    --danger-dk:    #B91C1C;
+    --warn:         #D97706;
+    --warn-dk:      #92400E;
+    --danger:       #E11D48;
+    --danger-dk:    #9F1239;
     --ink:          #0F172A;
     --ink-soft:     #1E293B;
     --slate-700:    #334155;
@@ -2156,15 +2198,17 @@ GLOBAL_CSS: Final[str] = """
     --slate-200:    #E2E8F0;
     --slate-100:    #F1F5F9;
     --slate-50:     #F8FAFC;
+    /* 8-pt spacing scale */
     --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
     --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
-    --fs-hero:    clamp(2rem, 1.7rem + 1.5vw, 2.75rem);
-    --fs-h1:      clamp(1.35rem, 1.1rem + 1vw, 1.85rem);
-    --fs-h2:      clamp(1.15rem, 1.05rem + 0.5vw, 1.4rem);
-    --fs-h3:      clamp(1rem, 0.95rem + 0.3vw, 1.15rem);
-    --fs-body:    0.95rem;
-    --fs-small:   0.82rem;
-    --fs-micro:   0.72rem;
+    /* Modular type scale (1.200) at 16 px base */
+    --fs-display: 2.25rem;
+    --fs-h1:      1.75rem;
+    --fs-h2:      1.375rem;
+    --fs-h3:      1.125rem;
+    --fs-body:    0.9375rem;
+    --fs-small:   0.8125rem;
+    --fs-micro:   0.6875rem;
     --radius-sm:  6px;
     --radius-md:  10px;
     --radius-lg:  14px;
@@ -2173,13 +2217,13 @@ GLOBAL_CSS: Final[str] = """
                   0 1px 3px rgba(15,23,42,0.06);
     --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
                   0 10px 24px rgba(15,23,42,0.06);
-    --shadow-brand: 0 4px 12px rgba(99,102,241,0.22);
+    --shadow-brand: 0 4px 12px rgba(79,70,229,0.22);
   }
 
   html, body, [class*="css"], .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
     font-size: 15px;
-    line-height: 1.65;
+    line-height: 1.6;
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -2189,7 +2233,7 @@ GLOBAL_CSS: Final[str] = """
   h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
   .hero-label, .exec-summary-eyebrow {
     font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
     color: var(--ink);
   }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
@@ -2203,20 +2247,20 @@ GLOBAL_CSS: Final[str] = """
     border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 8px 32px rgba(99,102,241,0.10);
+    box-shadow: 0 8px 32px rgba(79,70,229,0.10);
   }
   .app-hero-logo {
     flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
   }
   .app-hero-content { flex: 1; min-width: 0; }
   .app-hero-eyebrow {
-    font-size: 0.75rem; font-weight: 800;
+    font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.18em; text-transform: uppercase;
     color: var(--brand); margin-bottom: var(--s3);
     font-family: 'Sora', sans-serif !important;
   }
   .app-hero-title {
-    font-size: var(--fs-hero) !important; font-weight: 800 !important;
+    font-size: var(--fs-display) !important; font-weight: 800 !important;
     color: var(--ink) !important; line-height: 1.1 !important;
     margin: 0 0 var(--s3) 0 !important; padding: 0 !important;
     letter-spacing: -0.03em !important; display: block;
@@ -2234,7 +2278,7 @@ GLOBAL_CSS: Final[str] = """
     }
   }
   .app-hero-sub {
-    font-size: 1rem; color: var(--slate-600);
+    font-size: var(--fs-body); color: var(--slate-600);
     margin: 0 0 var(--s4) 0; line-height: 1.6; max-width: 760px;
   }
   .app-hero-meta {
@@ -2266,6 +2310,7 @@ GLOBAL_CSS: Final[str] = """
     padding-right: var(--s5) !important;
   }
 
+  /* ── Sidebar ─────────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0F172A 0%, #1E1B4B 100%);
     border-right: 1px solid #312E81;
@@ -2308,9 +2353,9 @@ GLOBAL_CSS: Final[str] = """
   }
 
   .sidebar-warning {
-    background: rgba(245,158,11,0.14);
-    border: 1px solid rgba(245,158,11,0.42);
-    border-left: 3px solid #F59E0B;
+    background: rgba(217,119,6,0.14);
+    border: 1px solid rgba(217,119,6,0.42);
+    border-left: 3px solid #D97706;
     border-radius: var(--radius-md);
     padding: 10px 12px;
     margin-top: var(--s3);
@@ -2321,7 +2366,7 @@ GLOBAL_CSS: Final[str] = """
   .sidebar-warning span   { color: #E2E8F0 !important; }
 
   .sidebar-headline {
-    background: rgba(99,102,241,0.18);
+    background: rgba(79,70,229,0.18);
     border: 1px solid rgba(165,180,252,0.42);
     border-left: 3px solid var(--brand-light);
     border-radius: var(--radius-md);
@@ -2341,6 +2386,7 @@ GLOBAL_CSS: Final[str] = """
   .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.74rem; }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
+  /* ── Metrics ─────────────────────────────────────────────────────── */
   [data-testid="stMetric"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200);
@@ -2370,7 +2416,7 @@ GLOBAL_CSS: Final[str] = """
     letter-spacing: -0.025em;
     line-height: 1.15;
     font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
-    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "ss01" 1;
     margin-top: 4px;
   }
   [data-testid="stMetricDelta"] {
@@ -2379,13 +2425,14 @@ GLOBAL_CSS: Final[str] = """
     margin-top: 4px;
   }
 
+  /* ── Chart card container ────────────────────────────────────────── */
   [data-testid="stVerticalBlockBorderWrapper"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
     border-radius: var(--radius-lg) !important;
-    padding: var(--s5) var(--s6) !important;
+    padding: var(--s4) var(--s5) !important;
     box-shadow: var(--shadow-sm);
-    margin-bottom: var(--s4);
+    margin-bottom: var(--s5);
     transition: box-shadow 0.2s ease;
   }
   [data-testid="stVerticalBlockBorderWrapper"]:hover {
@@ -2396,6 +2443,22 @@ GLOBAL_CSS: Final[str] = """
     margin-bottom: var(--s3) !important;
   }
 
+  /* ── Decision chips (ACTION / MONITOR / FYI) ─────────────────────── */
+  .chip {
+    display: inline-block;
+    font-size: var(--fs-micro);
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    padding: 3px 9px;
+    border-radius: 999px;
+    margin-bottom: var(--s3);
+    text-transform: uppercase;
+  }
+  .chip-action  { background: #FEE2E2; color: #9F1239; }
+  .chip-monitor { background: #FEF3C7; color: #92400E; }
+  .chip-fyi     { background: #E0E7FF; color: #3730A3; }
+
+  /* ── Buttons / alerts / expanders ────────────────────────────────── */
   .stButton > button {
     background: var(--brand); color: #FFFFFF;
     border: none; border-radius: var(--radius-md);
@@ -2409,7 +2472,6 @@ GLOBAL_CSS: Final[str] = """
     transform: translateY(-1px);
     box-shadow: var(--shadow-brand);
   }
-
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
     border-left: 4px solid var(--warn);
@@ -2434,7 +2496,7 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small) !important;
   }
 
-  /* ── In-page horizontal navigation tabs (replaces sidebar radio) ── */
+  /* ── In-page horizontal navigation tabs ──────────────────────────── */
   .nav-tabs-anchor + div [role="radiogroup"] {
     display: flex;
     gap: var(--s2);
@@ -2479,6 +2541,7 @@ GLOBAL_CSS: Final[str] = """
     font-weight: 700 !important;
   }
 
+  /* ── Info card ───────────────────────────────────────────────────── */
   .info-card {
     position: relative; background: #FFFFFF;
     border: 1px solid var(--slate-200);
@@ -2519,6 +2582,7 @@ GLOBAL_CSS: Final[str] = """
   .priority-medium { background: var(--warn); }
   .priority-low    { background: var(--success); }
 
+  /* ── Hero / strip banners ────────────────────────────────────────── */
   .hero-banner, .headline-strip {
     display: flex; align-items: center; gap: var(--s3);
     border-radius: var(--radius-lg);
@@ -2529,7 +2593,7 @@ GLOBAL_CSS: Final[str] = """
     background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 55%, #C7D2FE 100%);
     border: 1px solid #A5B4FC;
     border-left: 4px solid var(--brand);
-    box-shadow: 0 2px 12px rgba(99,102,241,0.14);
+    box-shadow: 0 2px 12px rgba(79,70,229,0.14);
   }
   .headline-strip {
     background: linear-gradient(90deg, #EEF2FF 0%, #FFFFFF 100%);
@@ -2543,7 +2607,7 @@ GLOBAL_CSS: Final[str] = """
   .headline-strip .headline-strip-text { flex: 1; min-width: 0; }
   .hero-banner .hero-label,
   .headline-strip .headline-strip-label {
-    display: block; font-size: 0.68rem; font-weight: 800;
+    display: block; font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
     color: var(--brand); margin-bottom: 4px;
   }
@@ -2558,6 +2622,7 @@ GLOBAL_CSS: Final[str] = """
     color: var(--brand-dark); font-weight: 700;
   }
 
+  /* ── Executive summary ───────────────────────────────────────────── */
   .exec-summary {
     display: flex; align-items: stretch; gap: var(--s5);
     background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
@@ -2565,11 +2630,11 @@ GLOBAL_CSS: Final[str] = """
     border-radius: var(--radius-lg);
     padding: var(--s5) var(--s6);
     margin: var(--s4) 0;
-    box-shadow: 0 4px 16px rgba(99,102,241,0.08);
+    box-shadow: 0 4px 16px rgba(79,70,229,0.08);
   }
   .exec-summary-main { flex: 1; min-width: 0; }
   .exec-summary-eyebrow {
-    font-size: 0.7rem; font-weight: 800;
+    font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.16em; color: var(--brand);
     margin-bottom: var(--s2);
   }
@@ -2600,6 +2665,32 @@ GLOBAL_CSS: Final[str] = """
     font-size: 1.05rem; line-height: 1.2; color: inherit;
   }
 
+  /* ── Action bar (decision banner under exec summary) ─────────────── */
+  .action-bar {
+    display: flex; align-items: center; gap: var(--s4);
+    background: linear-gradient(135deg, #ECFDF5 0%, #F0FDF4 100%);
+    border: 1px solid #6EE7B7;
+    border-left: 4px solid var(--success);
+    border-radius: var(--radius-lg);
+    padding: var(--s3) var(--s5);
+    margin: var(--s3) 0 var(--s4) 0;
+    box-shadow: 0 2px 8px rgba(5,150,105,0.10);
+  }
+  .action-bar-label {
+    flex-shrink: 0;
+    font-size: var(--fs-micro); font-weight: 800;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--success-dk);
+    padding-right: var(--s4);
+    border-right: 1px solid #6EE7B7;
+  }
+  .action-bar-body {
+    color: var(--slate-700);
+    font-size: var(--fs-small); line-height: 1.6;
+  }
+  .action-bar-body b { color: var(--ink); }
+
+  /* ── Overview banner ─────────────────────────────────────────────── */
   .overview-banner {
     background: #FEF3C7; border-left: 4px solid var(--warn);
     border-radius: var(--radius-lg); padding: var(--s4) var(--s5);
@@ -2608,12 +2699,13 @@ GLOBAL_CSS: Final[str] = """
   }
   .overview-banner b { color: #92400E; }
 
+  /* ── Scope pills ─────────────────────────────────────────────────── */
   .scope-pill {
     display: inline-block;
     background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
     color: #FFFFFF; border-radius: 999px;
     padding: 6px 14px; font-size: var(--fs-small); font-weight: 600;
-    box-shadow: 0 2px 10px rgba(99,102,241,0.28);
+    box-shadow: 0 2px 10px rgba(79,70,229,0.28);
   }
   .scope-pill-subtle {
     display: inline-block; background: var(--slate-100);
@@ -2622,6 +2714,7 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-small); font-weight: 600;
   }
 
+  /* ── Insight box ─────────────────────────────────────────────────── */
   .insight {
     display: flex; gap: var(--s3); align-items: flex-start;
     background: #F5F3FF; border-left: 3px solid var(--brand-light);
@@ -2634,11 +2727,11 @@ GLOBAL_CSS: Final[str] = """
     flex-shrink: 0;
     background: var(--brand); color: #FFFFFF;
     padding: 3px 10px; border-radius: 999px;
-    font-size: 0.68rem; font-weight: 700; white-space: nowrap;
+    font-size: var(--fs-micro); font-weight: 700; white-space: nowrap;
   }
   .insight-body { display: flex; flex-direction: column; gap: 2px; }
   .insight-scope {
-    font-size: 0.66rem; font-weight: 700; color: var(--brand);
+    font-size: var(--fs-micro); font-weight: 700; color: var(--brand);
     text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.9;
   }
   .insight-text { color: var(--slate-600); line-height: 1.6; }
@@ -2650,6 +2743,7 @@ GLOBAL_CSS: Final[str] = """
   }
   .insight-text .insight-impl b { color: var(--brand-dark); }
 
+  /* ── Verdict card ────────────────────────────────────────────────── */
   .verdict-card {
     display: flex; flex-direction: column; gap: 4px;
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
@@ -2659,7 +2753,7 @@ GLOBAL_CSS: Final[str] = """
     margin: var(--s3) 0;
   }
   .verdict-label {
-    font-size: 0.68rem; font-weight: 800;
+    font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.1em; text-transform: uppercase;
     color: var(--success-dk);
   }
@@ -2668,6 +2762,7 @@ GLOBAL_CSS: Final[str] = """
   }
   .verdict-text b { color: var(--ink); }
 
+  /* ── Empty state ─────────────────────────────────────────────────── */
   .empty-state {
     text-align: center; padding: var(--s7) var(--s5);
     background: var(--slate-50);
@@ -2693,7 +2788,7 @@ GLOBAL_CSS: Final[str] = """
 
   hr { border-color: var(--slate-200); margin: var(--s5) 0; }
 
-  /* Accessible keyboard focus and predictable text rendering. */
+  /* ── Accessibility ───────────────────────────────────────────────── */
   :focus-visible {
     outline: 3px solid #818CF8 !important;
     outline-offset: 2px !important;
@@ -2736,6 +2831,10 @@ GLOBAL_CSS: Final[str] = """
     .nav-tabs-anchor + div [role="radiogroup"] label p {
       white-space: normal;
     }
+    .action-bar {
+      flex-direction: column; align-items: flex-start;
+    }
+    .action-bar-label { border-right: none; padding-right: 0; }
   }
 </style>
 """
@@ -2789,12 +2888,7 @@ NAV_TABS: Final[tuple[str, ...]] = (
 
 
 def render_nav_tabs() -> str:
-    """Horizontal in-page navigation (replaces the old sidebar radio).
-
-    Rendered with `st.radio(horizontal=True)` so it works across Streamlit
-    versions; CSS styles it as a segmented tab strip. Returns the active
-    NAV_TABS entry so `main()` can dispatch to the right renderer.
-    """
+    """Horizontal in-page navigation (replaces the old sidebar radio)."""
     current = st.session_state.get("active_tab", NAV_TABS[0])
     try:
         idx = NAV_TABS.index(current)
@@ -2957,8 +3051,8 @@ def render_overview(year: str, states: tuple[str, ...],
     render_headline_strip(year, states)
     render_kpi_insight(year, states)
 
-    # Not filterable by design.
-    _chart_card(chart_review_distribution)
+    # Not filterable by design. Decision status: FYI (baseline context).
+    _chart_card(chart_review_distribution, decision="fyi")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -2981,14 +3075,19 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     st.divider()
 
-    _chart_card(chart_satisfaction_by_delivery_bucket, year, states)
+    # Delivery-time buckets: ACTION (where to intervene)
+    _chart_card(chart_satisfaction_by_delivery_bucket, year, states,
+                decision="action")
 
-    # Geographic view — Q4 then Q5 (stacked)
-    _chart_card(chart_state_scores, year, states)             # Q4
-    _chart_card(chart_ontime_by_state, year, states)          # Q5
+    # Geography: MONITOR (where to look, not what to do)
+    _chart_card(chart_state_scores, year, states, decision="monitor")
+    _chart_card(chart_ontime_by_state, year, states, decision="monitor")
 
-    _chart_card(chart_monthly_score, year, states)
-    _chart_card(chart_brazil_map, year, states)
+    # Trend: MONITOR
+    _chart_card(chart_monthly_score, year, states, decision="monitor")
+
+    # Map: FYI (distribution context, low decision value)
+    _chart_card(chart_brazil_map, year, states, decision="fyi")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3003,7 +3102,9 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "quoting the numbers in a decision."
     )
 
-    _chart_card(chart_punctuality_vs_satisfaction, year, states)
+    # Punctuality: ACTION (the evidence behind the primary recommendation)
+    _chart_card(chart_punctuality_vs_satisfaction, year, states,
+                decision="action")
 
     st.divider()
     st.markdown("### Limitations")
@@ -3072,9 +3173,8 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "L7 — Dataset and generalisability boundaries",
         """<p>Findings concern Olist in Brazil during 2016–2018. They
         may not generalise to other countries, marketplaces, logistics
-        networks or current operating conditions. The choropleth fetches
-        a public GeoJSON at runtime, so map rendering depends on external
-        availability.</p>""",
+        networks or current operating conditions. The choropleth prefers
+        a vendored local GeoJSON file, so map rendering is deployment-safe.</p>""",
         variant="info", tags=["External validity", "Map proxy"],
     )
     info_card(
@@ -3373,8 +3473,10 @@ def main() -> None:
     except Exception as exc:
         _LOGGER.warning("Exec summary failed: %s", exc)
 
-    # In-page navigation now lives in the dashboard body, right below the
-    # hero banner and executive summary — not in the sidebar.
+    # Decision banner: translates the executive summary into a next action.
+    render_action_bar()
+
+    # In-page horizontal navigation (replaces the old sidebar radio).
     active_tab = render_nav_tabs()
 
     st.write("")
