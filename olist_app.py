@@ -1645,14 +1645,14 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
     cmap = plt.get_cmap("YlGnBu")
 
-    # Increase figure height slightly to give the map more breathing room
-    fig, ax = plt.subplots(figsize=(13.5, 5.5))
+    # Use a taller figure so the dense northeast cluster has breathing room
+    fig, ax = plt.subplots(figsize=(13.5, 6.5))
     ax.set_axis_off()
     ax.set_title(f"Reviews by State — {scope_label(year, states)}",
                  fontsize=14, fontweight="bold",
                  color=PALETTE.ink_soft, pad=16, loc="left")
 
-    # Draw the polygons
+    # 1. Draw all polygons
     for _, row in gdf.iterrows():
         st_code = row["state"]
         n = reviews_by_state.get(st_code)
@@ -1661,84 +1661,92 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
             else PALETTE.slate_200
         _plot_geo(ax, row["geometry"], facecolor=face)
 
-    # Manual offsets (in map coordinates, approx degrees) to prevent overlaps.
-    # Keyed by state code.
-    offset_map = {
-        # Northeast cluster
-        "RN": (0.0, -0.8), "PB": (0.4, -0.4), "PE": (0.6, 0.0), "AL": (0.2, -0.4),
-        "SE": (0.0, -0.6), "CE": (-0.2, 0.2),
-        # South/Southeast cluster
-        "DF": (0.0, 0.4), "RJ": (0.6, -0.4), "ES": (0.4, 0.0),
-        "SP": (-1.0, 0.2), "MG": (1.0, 0.4), "PR": (0.0, -0.4),
+    # 2. Define manual offsets for the overlap cluster (Northeast & Southeast)
+    # We split the Northeast into two columns: left (MA, PI, CE) and right (RN, PB, PE, AL, SE)
+    offsets = {
+        # Northeast (Left column)
+        "MA": (-1.8, 0.0), "PI": (-1.2, -0.3), "CE": (-0.8, 0.6),
+        # Northeast (Right column)
+        "RN": (1.2, 1.0), "PB": (1.4, 0.2), "PE": (1.2, -0.6),
+        "AL": (1.0, -1.4), "SE": (0.8, -2.0),
+        # Southeast
+        "DF": (-0.5, 1.0), "GO": (-1.0, -1.0), "RJ": (1.0, -1.0), "ES": (1.2, 0.5),
+        "SP": (-1.0, -0.5), "MG": (1.0, 0.5), "PR": (0.0, -1.0),
         # North
-        "AP": (0.6, -0.4), "AM": (0.0, 0.0), "AC": (0.0, 0.0),
-        "RO": (0.2, 0.4),
+        "AP": (1.0, -0.5), "RR": (0.0, -0.5),
     }
 
-    # Annotate labels
+    # 3. Draw labels
     for _, row in gdf.iterrows():
         st_code = row["state"]
         geom = row["geometry"]
         n = reviews_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
         
-        # Calculate a better visual center (bounding-box center for the main ring)
+        # If state is out of scope AND there's an active filter, don't draw text
+        # (keeps the focused map clean and avoids labels on top of labels).
+        if filter_active and not in_scope:
+            # Just draw a tiny grey label with the state code
+            pass
+
         try:
             gtype, coords = geom.get("type"), geom.get("coordinates")
             if not gtype or not coords:
                 continue
             
-            # Handle MultiPolygon (use the largest polygon)
             if gtype == "MultiPolygon":
                 coords = max(coords, key=lambda p: len(p[0]))
             elif gtype != "Polygon":
                 continue
             
-            # Use the outer ring
             ring = coords[0]
             if not ring:
                 continue
                 
-            # Calculate bounding box center (visual center)
             xs = [pt[0] for pt in ring]
             ys = [pt[1] for pt in ring]
             cx = (max(xs) + min(xs)) / 2
             cy = (max(ys) + min(ys)) / 2
-            
-            # Apply manual offset if needed
-            dx, dy = offset_map.get(st_code, (0, 0))
-            cx += dx
-            cy += dy
 
         except Exception:
             continue
 
-        # Determine label content based on scope
         share = (100.0 * n / total_reviews
                  if (n is not None and total_reviews) else None)
         
-        if n is not None and in_scope:
-            # Compact 3-line label: State, Count, Share
+        if in_scope and n is not None:
+            # Draw state code + values
+            dx, dy = offsets.get(st_code, (0, 0))
             label = f"{st_code}\n{int(n):,}\n{share:.1f}%"
             color, weight = PALETTE.ink, "bold"
-        elif n is not None:
-            # Out of scope but still on map: show state and count only
-            label = f"{st_code}\n{int(n):,}"
-            color, weight = PALETTE.slate_400, "normal"
+            
+            # We'll use ax.annotate for the offset states so the line draws
+            # from the state's center to the label.
+            if dx != 0 or dy != 0:
+                # Draw a subtle dot in the actual center
+                ax.scatter(cx, cy, color=PALETTE.slate_400, s=8, zorder=5)
+                # Point the text
+                ax.annotate(
+                    label, xy=(cx, cy), xytext=(cx + dx, cy + dy),
+                    ha="center", va="center", fontsize=5.5,
+                    color=color, fontweight=weight,
+                    arrowprops=dict(arrowstyle="-", color=PALETTE.slate_400, lw=0.5),
+                    zorder=6
+                )
+            else:
+                ax.text(cx, cy, label, ha="center", va="center",
+                        fontsize=5.5, color=color, fontweight=weight, zorder=5)
         else:
-            # No data (shouldn't happen with full dataset)
-            label = st_code
-            color, weight = PALETTE.slate_400, "normal"
-
-        ax.text(cx, cy, label, ha="center", va="center",
-                fontsize=5.0, color=color, fontweight=weight, zorder=5)
+            # Just show the state code for unselected states
+            ax.text(cx, cy, st_code, ha="center", va="center",
+                    fontsize=5.0, color=PALETTE.slate_400, fontweight="normal", zorder=5)
 
     # Set map limits to standard Brazil bounds
     ax.set_xlim(-74.0, -34.0)
     ax.set_ylim(-34.0, 6.0)
     ax.set_aspect("equal")
 
-    # Colorbar
+    # 4. Colorbar with safe formatting
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="horizontal",
@@ -1746,6 +1754,9 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     cbar.set_label("Number of reviews", fontsize=10,
                    color=PALETTE.slate_500)
     cbar.ax.tick_params(labelsize=9)
+    # Prevent the colorbar ticks from running together
+    cbar.ax.xaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{int(x):,}"))
+    
     _finish(fig)
 
     # Insight block
