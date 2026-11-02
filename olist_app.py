@@ -667,11 +667,6 @@ def _safe_chart(fn: Callable[..., None], *args, **kwargs) -> None:
         st.warning(f"⚠️ This chart could not render: {exc}")
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# DECISION CHIP: each chart card carries an explicit ACTION / MONITOR / FYI
-# label so viewers immediately know what to do with it.
-# ────────────────────────────────────────────────────────────────────────────
-
 _DECISION_LABELS: Final[dict[str, str]] = {
     "action":  "ACTION",
     "monitor": "MONITOR",
@@ -1535,9 +1530,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any] | None:
     """Prefer a vendored local file so the map renders without internet.
-
     Falls back to remote mirrors only if the local file is missing or invalid.
-    This makes the dashboard deployment-safe on Streamlit Community Cloud.
     """
     local_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
@@ -1652,12 +1645,14 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
     cmap = plt.get_cmap("YlGnBu")
 
-    fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
+    # Increase figure height slightly to give the map more breathing room
+    fig, ax = plt.subplots(figsize=(13.5, 5.5))
     ax.set_axis_off()
     ax.set_title(f"Reviews by State — {scope_label(year, states)}",
-                 fontsize=12, fontweight="bold",
-                 color=PALETTE.ink_soft, pad=12, loc="left")
+                 fontsize=14, fontweight="bold",
+                 color=PALETTE.ink_soft, pad=16, loc="left")
 
+    # Draw the polygons
     for _, row in gdf.iterrows():
         st_code = row["state"]
         n = reviews_by_state.get(st_code)
@@ -1666,45 +1661,84 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
             else PALETTE.slate_200
         _plot_geo(ax, row["geometry"], facecolor=face)
 
+    # Manual offsets (in map coordinates, approx degrees) to prevent overlaps.
+    # Keyed by state code.
+    offset_map = {
+        # Northeast cluster
+        "RN": (0.0, -0.8), "PB": (0.4, -0.4), "PE": (0.6, 0.0), "AL": (0.2, -0.4),
+        "SE": (0.0, -0.6), "CE": (-0.2, 0.2),
+        # South/Southeast cluster
+        "DF": (0.0, 0.4), "RJ": (0.6, -0.4), "ES": (0.4, 0.0),
+        "SP": (-1.0, 0.2), "MG": (1.0, 0.4), "PR": (0.0, -0.4),
+        # North
+        "AP": (0.6, -0.4), "AM": (0.0, 0.0), "AC": (0.0, 0.0),
+        "RO": (0.2, 0.4),
+    }
+
+    # Annotate labels
     for _, row in gdf.iterrows():
         st_code = row["state"]
         geom = row["geometry"]
         n = reviews_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
+        
+        # Calculate a better visual center (bounding-box center for the main ring)
         try:
             gtype, coords = geom.get("type"), geom.get("coordinates")
             if not gtype or not coords:
                 continue
-            if gtype == "Polygon":
-                ring = coords[0]
-            elif gtype == "MultiPolygon":
-                ring = max(coords, key=lambda p: len(p[0]))[0]
-            else:
+            
+            # Handle MultiPolygon (use the largest polygon)
+            if gtype == "MultiPolygon":
+                coords = max(coords, key=lambda p: len(p[0]))
+            elif gtype != "Polygon":
                 continue
+            
+            # Use the outer ring
+            ring = coords[0]
             if not ring:
                 continue
-            cx = sum(pt[0] for pt in ring) / len(ring)
-            cy = sum(pt[1] for pt in ring) / len(ring)
+                
+            # Calculate bounding box center (visual center)
+            xs = [pt[0] for pt in ring]
+            ys = [pt[1] for pt in ring]
+            cx = (max(xs) + min(xs)) / 2
+            cy = (max(ys) + min(ys)) / 2
+            
+            # Apply manual offset if needed
+            dx, dy = offset_map.get(st_code, (0, 0))
+            cx += dx
+            cy += dy
+
         except Exception:
             continue
+
+        # Determine label content based on scope
         share = (100.0 * n / total_reviews
                  if (n is not None and total_reviews) else None)
+        
         if n is not None and in_scope:
-            label = (f"{st_code}\n{int(n):,}\n{share:.1f}%"
-                     if share is not None else f"{st_code}\n{int(n):,}")
+            # Compact 3-line label: State, Count, Share
+            label = f"{st_code}\n{int(n):,}\n{share:.1f}%"
             color, weight = PALETTE.ink, "bold"
         elif n is not None:
+            # Out of scope but still on map: show state and count only
             label = f"{st_code}\n{int(n):,}"
             color, weight = PALETTE.slate_400, "normal"
         else:
+            # No data (shouldn't happen with full dataset)
             label = st_code
             color, weight = PALETTE.slate_400, "normal"
-        ax.text(cx, cy, label, ha="center", va="center",
-                fontsize=5.5, color=color, fontweight=weight, zorder=5)
 
-    ax.set_xlim(-74.0, -34.0); ax.set_ylim(-34.0, 6.0)
+        ax.text(cx, cy, label, ha="center", va="center",
+                fontsize=5.0, color=color, fontweight=weight, zorder=5)
+
+    # Set map limits to standard Brazil bounds
+    ax.set_xlim(-74.0, -34.0)
+    ax.set_ylim(-34.0, 6.0)
     ax.set_aspect("equal")
 
+    # Colorbar
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="horizontal",
@@ -1714,6 +1748,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     cbar.ax.tick_params(labelsize=9)
     _finish(fig)
 
+    # Insight block
     in_scope_pairs = [(s, v) for s, v in reviews_by_state.items()
                       if (not filter_active) or (s in states)]
     if not in_scope_pairs:
