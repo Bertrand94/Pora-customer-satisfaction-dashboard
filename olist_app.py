@@ -894,7 +894,7 @@ def chart_punctuality_vs_satisfaction(year: str,
     bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
                     color=colors, edgecolor=PALETTE.white, linewidth=1.4,
                     width=0.62)
-    ax1.set_title("Mean score by lateness severity (order-grain)",
+    ax1.set_title("Mean score by lateness severity",
                   pad=10, loc="left", fontsize=12)
     ax1.set_ylabel("Avg review score (1–5)")
     ax1.set_ylim(1, 5.4)
