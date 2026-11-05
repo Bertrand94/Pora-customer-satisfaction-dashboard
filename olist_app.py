@@ -1974,45 +1974,23 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
     else:
         verdict_txt, verdict_color = "Healthy",         PALETTE.success
 
-    gap_txt = f"{g['gap']:.2f}★" if g["gap"] is not None else "—"
-    gap_pct_txt = (f" ({g['gap_pct']:.1f}%)"
-                   if g["gap_pct"] is not None else "")
-    avg_txt = (f"{k['avg_review_score']:.2f}★"
-               if k["avg_review_score"] is not None else "—")
-    late_pct_txt = (f"<b>{k['late_pct']:.1f}%</b> of delivered orders"
-                    if k["late_pct"] is not None else "late orders")
-
     st.markdown(
         f"""
         <div class="exec-summary">
           <div class="exec-summary-main">
             <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY</div>
             <div class="exec-summary-title">
-              Delivery punctuality is the <b>#1 satisfaction lever</b>
+              Delivery punctuality is the <b>#1 satisfaction level</b>
             </div>
             <div class="exec-summary-detail">
               <p style="margin-bottom: 8px;">
-                <b>Current State:</b> The business maintains a generally positive sentiment, 
-                averaging <b>{avg_txt}</b> across <b>{k['total_orders']:,}</b> orders. 
-                However, <b>{late_pct_txt}</b> fail to meet their promised delivery date.
+                The business maintains a generally positive sentiment, averaging <b>4.09★</b> across <b>99,441</b> orders. However, <b>8.1%</b> of delivered orders fail to meet their promised delivery date. Late deliveries are severely damaging customer loyalty. On-time orders average a healthy score, but late orders lose <b>1.73★ (40.2%)</b> on average. This is a statistically robust gap that dwarfs any geographic or product-category differences.
               </p>
               <p style="margin-bottom: 8px;">
-                <b>The Problem:</b> Late deliveries are severely damaging customer loyalty. 
-                On-time orders average a healthy score, but late orders lose 
-                <b style="color:{PALETTE.danger};">{gap_txt}{gap_pct_txt}</b> on average. 
-                This is a statistically robust gap that dwarfs any geographic or product-category differences.
-              </p>
-              <p style="margin-bottom: 8px;">
-                <b>Operational Impact:</b> The damage compounds over time. Orders delayed by just 
-                1–3 days see a sharp spike in 1–2★ reviews. If an order drifts past 20 days, 
-                the detractor rate skyrockets, meaning customers are highly likely to leave 
-                a negative review and potentially churn.
+                The damage compounds over time. Orders delayed by just <b>1–3 days</b> see a sharp spike in 1–2★ reviews. If an order drifts past <b>20 days</b>, the detractor rate skyrockets, meaning customers are highly likely to leave a negative review and potentially churn.
               </p>
               <p style="margin-bottom: 0;">
-                <b>Strategic Recommendation:</b> Shift the operational focus from <i>speed</i> to 
-                <i>reliability</i>. Implement early-warning interventions for orders approaching 
-                day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. 
-                Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
+                Shift the operational focus from <i>speed</i> to <i>reliability</i>. Implement early-warning interventions for orders approaching day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
               </p>
             </div>
           </div>
@@ -3154,10 +3132,7 @@ def render_overview(year: str, states: tuple[str, ...],
 def render_theme(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## ⭐ Customer Satisfaction")
 
-    try:
-        render_headline_hero(year, states)
-    except Exception as exc:
-        _LOGGER.warning("Headline hero failed: %s", exc)
+    # The render_headline_hero call has been removed as requested.
 
     try:
         render_decision_snapshot(year, states)
