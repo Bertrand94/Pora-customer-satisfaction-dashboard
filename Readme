@@ -1,24 +1,39 @@
-# Customer Satisfaction Dashboard — Olist Capstone
+# 🛍️ Olist Customer Satisfaction Dashboard
 
-**PORA Academy Cohort 7 · Data Analysis · Group 1 Capstone**
+**PORA Academy · Cohort 7 · Data Analysis · Group 1 Capstone**
 
-A decision-first Streamlit dashboard built on **99,441 Olist orders (2016–2018)**.
+A decision-first Streamlit dashboard built on **99,441 Olist orders (2016–2018)** to identify what truly drives customer satisfaction.
 
-**Primary finding:** Delivery punctuality is the #1 satisfaction lever. Late deliveries cost an average of **1.73★** (a **40.2% drop**) compared with on-time orders — a gap that dwarfs any geographic or product-category difference.
+> **Primary finding:** Delivery punctuality is the **#1 satisfaction lever**. Late deliveries cost an average of **1.73★** (a **40.2% drop** compared with on-time orders) — a gap that dwarfs any geographic or product-category difference.
 
-🔗 **Live app:** https://pora-customer-satisfaction-dashboard-wu3ymdqefkytau38tt7mss.streamlit.app/
+🔗 **Live app:** [pora-customer-satisfaction-dashboard](https://pora-customer-satisfaction-dashboard-wu3ymdqefkytau38tt7mss.streamlit.app/)
 
 ---
 
-## What responds to the filters
+## 📖 Project Overview
 
-The sidebar **Reporting Year** and **State** selectors apply to every KPI and chart — with **one deliberate exception**: the **Review Score Distribution** always shows the whole dataset as the baseline, so you never lose sight of the overall picture while exploring a slice.
+While e-commerce businesses often obsess over raw speed, this analysis proves that **reliability** — meeting the promised delivery date — is what actually drives customer loyalty. The dashboard guides stakeholders from high-level KPIs down to statistically verified root causes, ending with prioritized, high-ROI recommendations.
+
+### ✨ Key Features
+
+- **Decision-first navigation:** In-page horizontal tabs (Overview → Customer Satisfaction → Detail & Method → Recommendations) that tell a coherent story.
+- **Interactive global filters:** Year and State selectors that dynamically update **every KPI and chart** on the dashboard.
+- **Dose–response analysis:** Visualises how satisfaction collapses as delays grow (On Time → Slightly Late → Moderately Late → Severely Late).
+- **Statistical rigor:** Welch's t-test, Cohen's *d*, and 95% confidence intervals prove the robustness of the delivery gap.
+- **What-if simulator:** An interactive slider projecting the expected average review score if a percentage of late orders were converted to on-time.
+- **Geographic insights:** A custom-rendered map of Brazil highlighting review concentration and lagging states (e.g., Rio de Janeiro, Bahia).
+
+---
+
+## 📊 What responds to the filters
+
+The sidebar **Reporting Year** and **State** selectors apply to **every KPI and chart** on the dashboard. Set both filters to **All** to reproduce the reference numbers.
 
 | Element | Filtered? |
 |---|---|
 | Executive summary + headline strip | ✅ Yes |
 | KPI row (orders, delivered, avg review, late, avg delivery days) | ✅ Yes |
-| **Review score distribution** | ❌ **No — always whole-dataset baseline** |
+| **Review score distribution** | ✅ **Yes** |
 | Monthly average review score | ✅ Yes |
 | Average review score by state (top 10) | ✅ Yes |
 | On-time vs late by state (top 5) | ✅ Yes |
@@ -29,11 +44,11 @@ The sidebar **Reporting Year** and **State** selectors apply to every KPI and ch
 | Detail & Method diagnostic tables | ❌ No — whole-dataset data-quality checks |
 | Recommendations tab | ❌ No — decisions are based on the whole dataset |
 
-All filtered queries share one definition (`apply_filters()` in `olist_app.py`), so every chart filters identically. Set both filters to **All** to reproduce the reference numbers.
+All filtered queries share one definition (`apply_filters()` in `olist_app.py`), so every chart filters identically.
 
 ---
 
-## Repository structure
+## 📂 Repository Structure
 
 ```text
 ├── .streamlit/                              # Streamlit config
@@ -45,6 +60,7 @@ All filtered queries share one definition (`apply_filters()` in `olist_app.py`),
 ├── Customer satisfaction report.pdf         # Detailed written report
 ├── Customer-Satisfaction-Presentation.pptx  # Stakeholder slide deck
 ├── Data_cleaning.ipynb                      # Data preparation notebook
+├── FINAL LIST OF CUSTOMER SATISFACTION TEAM.docx  # Team roster
 ├── olist_app.py                             # Main Streamlit application
 ├── olist_dashboard.db                       # SQLite database
 ├── pora_logo.png                            # Branding asset
