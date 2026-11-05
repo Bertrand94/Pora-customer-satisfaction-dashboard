@@ -16,12 +16,16 @@ TAB LAYOUT (in-page horizontal navigation, not sidebar)
                             limitations, whole-dataset diagnostics
   4. Recommendations        Priority matrix, findings, prioritised actions
 
+PRESENTATION
+  Story mode (sidebar checkbox) hides the sidebar and footer so the active
+  tab fills the screen — ideal when projecting during a demo.
+
 DEPLOY
   Local:    streamlit run olist_app.py
   Cloud:    Streamlit Community Cloud → set OLIST_DATA_DIR if CSVs
             are not in ./data
 REQUIREMENTS
-  streamlit · pandas · matplotlib · requests · plotly · scipy
+  streamlit>=1.42 · pandas · matplotlib · requests · plotly · scipy
   See requirements.txt for tested deployment dependency ranges.
 ════════════════════════════════════════════════════════════════════════════
 """
@@ -64,6 +68,9 @@ PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
 
+# L8 guard: suppress population-level claims on small selections.
+MIN_RELIABLE_REVIEWS: Final[int] = 200
+
 REF: Final[dict[str, Any]] = {
     "total_orders":      99_441,
     "delivered_orders":  96_478,
@@ -82,36 +89,38 @@ REF: Final[dict[str, Any]] = {
 
 @dataclass(frozen=True)
 class Palette:
-    # ── Brand (WCAG AA on white) ─────────────────────────────────────────
-    primary:       str = "#4F46E5"   # Indigo 600 — AA on white
-    primary_light: str = "#A5B4FC"
-    primary_dark:  str = "#3730A3"
-    accent:        str = "#EA580C"   # Orange 700 — AA on white
-    accent_light:  str = "#FDBA74"
-    accent_dark:   str = "#9A3412"
+    # ── Brand: teal-indigo "trust" palette ───────────────────────────────
+    # Interactive affordances only (tabs, buttons, links). Not used for
+    # data fills — those use the semantic tokens below.
+    primary:       str = "#4F46E5"   # Indigo 600  (interactive)
+    primary_light: str = "#A5B4FC"   # Indigo 300  (focus ring / borders)
+    primary_dark:  str = "#3730A3"   # Indigo 800  (hover)
+    accent:        str = "#0F766E"   # Teal 700    (brand accent, AA on white)
+    accent_light:  str = "#5EEAD4"   # Teal 300
+    accent_dark:   str = "#115E59"   # Teal 800
 
-    # ── Semantic (WCAG AA on white) ──────────────────────────────────────
-    success:       str = "#059669"   # Emerald 600
-    success_light: str = "#6EE7B7"
-    success_dark:  str = "#047857"
-    warn:          str = "#D97706"   # Amber 600
-    warn_light:    str = "#FCD34D"
-    warn_dark:     str = "#92400E"
-    danger:        str = "#E11D48"   # Rose 600
-    danger_light:  str = "#FDA4AF"
-    danger_dark:   str = "#9F1239"
+    # ── Sentiment semantic (NPS-aligned, WCAG AA on white) ───────────────
+    success:       str = "#047857"   # Emerald 700 — AA body text
+    success_light: str = "#6EE7B7"   # Emerald 300 — fills only
+    success_dark:  str = "#064E3B"   # Emerald 900
+    warn:          str = "#B45309"   # Amber 700  — AA body text
+    warn_light:    str = "#FCD34D"   # Amber 300  — fills only
+    warn_dark:     str = "#78350F"   # Amber 900
+    danger:        str = "#BE123C"   # Rose 700   — AA body text
+    danger_light:  str = "#FDA4AF"   # Rose 300   — fills only
+    danger_dark:   str = "#881337"   # Rose 900
 
-    # ── Neutrals ─────────────────────────────────────────────────────────
-    ink:           str = "#0F172A"
-    ink_soft:      str = "#1E293B"
-    slate_700:     str = "#334155"
-    slate_600:     str = "#475569"
-    slate_500:     str = "#64748B"
-    slate_400:     str = "#94A3B8"
-    slate_300:     str = "#CBD5E1"
-    slate_200:     str = "#E2E8F0"
-    slate_100:     str = "#F1F5F9"
-    slate_50:      str = "#F8FAFC"
+    # ── Neutrals: stone (warmer) instead of slate ────────────────────────
+    ink:           str = "#1C1917"   # Stone 900
+    ink_soft:      str = "#292524"   # Stone 800
+    slate_700:     str = "#44403C"   # Stone 700
+    slate_600:     str = "#57534E"   # Stone 600
+    slate_500:     str = "#78716C"   # Stone 500
+    slate_400:     str = "#A8A29E"   # Stone 400
+    slate_300:     str = "#D6D3D1"   # Stone 300
+    slate_200:     str = "#E7E5E4"   # Stone 200
+    slate_100:     str = "#F5F5F4"   # Stone 100
+    slate_50:      str = "#FAFAF9"   # Stone 50
     white:         str = "#FFFFFF"
 
 
@@ -630,19 +639,13 @@ def query_headline_gap(year: str,
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def query_gmv(year: str, states_tuple: tuple[str, ...],
-              definition: str | None = GMV_DEFINITION) -> dict[str, Any] | None:
+              definition: str | None) -> dict[str, Any] | None:
     """Return order-grain GMV under the chosen definition, or ``None`` if unset.
 
-    Returns ``{"gmv", "merchandise", "freight", "definition", "orders"}`` when
-    ``definition`` is ``"A"`` or ``"B"``. ``"C"`` (payment_value) is rejected
-    because the payments CSV is not loaded by this app — refusing to emit a
-    figure is the honest behaviour, not a limitation to paper over.
-
-    Dedupe rationale: reviews are row-level (99,224 rows / 98,673 orders —
-    L3 fan-out), and multi-item orders have multiple order_items rows, so the
-    merge is followed by an order-grain groupby *before* summing. Only
-    delivered orders contribute (cancelled/unavailable orders would otherwise
-    inflate GMV with revenue that never landed).
+    ``definition`` is passed explicitly at every call site (not read from the
+    module-level default) so the cache key always reflects the value actually
+    requested — Python evaluates default arguments once at definition time,
+    which would otherwise serve a stale result if ``GMV_DEFINITION`` changed.
     """
     if definition is None:
         return None
@@ -793,6 +796,49 @@ def _chart_card(fn: Callable[..., None], *args,
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# §5.x  TAB-LEVEL TAKEAWAY STRIP
+# ════════════════════════════════════════════════════════════════════════════
+
+_TAB_TAKEAWAYS: Final[dict[str, tuple[str, str]]] = {
+    "📈  Overview": (
+        "Baseline",
+        "Delivery reliability is the headline driver — review the KPI row, "
+        "then the distribution shape.",
+    ),
+    "⭐  Customer Satisfaction": (
+        "Diagnose",
+        "Delivery-time buckets are the action surface. States and months "
+        "tell you where to look.",
+    ),
+    "🔬  Detail & Method": (
+        "Evidence",
+        "The 1.73★ gap is statistically robust. Read L1–L9 before quoting "
+        "a precise lift.",
+    ),
+    "💡  Recommendations": (
+        "Act",
+        "Start with R2 (day-20 intervention) and R5 (promise reliability) — "
+        "high impact, low effort.",
+    ),
+}
+
+
+def render_tab_takeaway(tab: str) -> None:
+    label, body = _TAB_TAKEAWAYS.get(tab, ("", ""))
+    if not label:
+        return
+    st.markdown(
+        f"""
+        <div class="takeaway-strip">
+          <span class="takeaway-label">{label}</span>
+          <span class="takeaway-body">{body}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # §6  OVERVIEW CHART  (Q2) — FILTER-AWARE
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -822,6 +868,9 @@ def chart_review_distribution(year: str = "All",
     if total == 0:
         _no_data(); return
     pct = 100.0 * counts / total
+
+    # L8 guard: suppress population-level claims on small selections.
+    reliable = total >= MIN_RELIABLE_REVIEWS
 
     shades = [
         PALETTE.success if s == 5
@@ -868,13 +917,20 @@ def chart_review_distribution(year: str = "All",
             "disappointment."
         )
 
+    sentiment_claim = (
+        "Overall sentiment is strongly positive, so the business is not "
+        "broadly failing."
+        if reliable else
+        f"⚠️ With only <b>{total:,}</b> reviews, read this shape with "
+        f"caution — it is a small sample (see L8)."
+    )
+
     _insight(
         year, states,
         f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ and <b>{s1:.1f}%</b> "
         f"are 1★; promoters (4–5★) hold <b>{high_share:.1f}%</b> vs "
         f"detractors (1–2★) at <b>{low_share:.1f}%</b>, a net margin of "
-        f"<b>{net:+.1f} pp</b>. Overall sentiment is "
-        f"strongly positive, so the business is not broadly failing. "
+        f"<b>{net:+.1f} pp</b>. {sentiment_claim} "
         f"{shape} The detractor tail is where the improvement opportunity "
         f"sits, and the next charts test whether delivery performance "
         f"explains it." + _impl(
@@ -1086,7 +1142,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         pct = st.slider(
             "Percentage of late orders made on-time",
             min_value=0, max_value=100, value=10, step=5,
-            key=f"whatif_{year}_{len(states)}",
+            key=f"whatif_{year}_{hash(states) & 0xFFFF:x}",
             help="Projects the effect on the selection average. "
                  "Assumes converted orders land at the on-time mean.",
         )
@@ -1145,7 +1201,8 @@ def chart_punctuality_vs_satisfaction(year: str,
                 "Expected avg score": f"{nm:.3f}",
                 "Δ vs current":       f"{nm - sel_avg:+.3f}★",
             })
-        with st.expander("📋 Full sensitivity table (5%, 10%, 25%, 50%)",
+        scen_label = ", ".join(f"{p}%" for p in PUNCT_SCENARIOS)
+        with st.expander(f"📋 Full sensitivity table ({scen_label})",
                          expanded=False):
             _st_dataframe(pd.DataFrame(scen_rows))
             lift_1pct = ((n_late * 0.01 * (on_mean - late_mean)) / new_total
@@ -1490,16 +1547,15 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
     ax.legend(frameon=False, loc="upper right")
     ymax = float(max(grp["delivered"].max(), 1)) * 1.18
     ax.set_ylim(0, ymax)
-    
+
     for i, (_, r) in enumerate(grp.iterrows()):
         # Late percentage (red text)
         ax.text(i + w / 2, r["late"] + ymax * 0.015,
                 f"{r['late_pct']:.1f}%",
                 ha="center", va="bottom", fontsize=9,
                 color=PALETTE.danger, fontweight="bold")
-        
+
         # On-time total count (green text)
-        # We place it at the top of the green bar
         ax.text(i - w / 2, r["on_time"] + ymax * 0.015,
                 f"{int(r['on_time']):,}",
                 ha="center", va="bottom", fontsize=9,
@@ -1568,20 +1624,20 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     ax.plot(grp["month"], grp["avg_score"], marker="o",
             color=PALETTE.primary, linewidth=2.4, markersize=6,
             markerfacecolor=PALETTE.white, markeredgewidth=1.8)
-    
+
     # Leave a little padding so the first/last points don't touch the edges
     ax.margins(x=0.03)
-    
+
     ax.set_title("Monthly Average Review Score (row-level AVG)",
                  pad=14, loc="left")
     ax.set_xlabel("Month"); ax.set_ylabel("Avg review score (1–5)")
-    
+
     lo = max(1.0, float(grp["avg_score"].min()) - 0.2)
     hi = min(5.0, float(grp["avg_score"].max()) + 0.2)
     if hi - lo < 0.5:
         mid = (hi + lo) / 2
         lo, hi = max(1.0, mid - 0.25), min(5.0, mid + 0.25)
-    
+
     # Add extra space at the top to ensure the annotation doesn't clash
     ax.set_ylim(lo, hi + 0.4)
     _style_axes(ax)
@@ -1600,12 +1656,12 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
 
     low_i  = grp["avg_score"].idxmin()
     high_i = grp["avg_score"].idxmax()
-    
+
     # Highlight the lowest point
     ax.scatter([grp.loc[low_i, "month"]], [grp.loc[low_i, "avg_score"]],
                s=170, color=PALETTE.danger, zorder=5,
                edgecolor=PALETTE.white, linewidth=1.8)
-               
+
     # Annotate upwards into the empty space instead of downwards into the axis
     ax.annotate(
         f"Lowest\n{grp.loc[low_i,'month']}\n{grp.loc[low_i,'avg_score']:.2f}",
@@ -1684,7 +1740,11 @@ def load_brazil_geojson() -> dict[str, Any] | None:
 
     for url in CONFIG.geojson_urls:
         try:
-            r = requests.get(url, timeout=CONFIG.geojson_timeout_seconds)
+            r = requests.get(
+                url,
+                timeout=CONFIG.geojson_timeout_seconds,
+                headers={"User-Agent": "olist-capstone-dashboard/1.0"},
+            )
             r.raise_for_status()
             data = r.json()
             if isinstance(data, dict) and "features" in data:
@@ -1742,8 +1802,8 @@ def _plot_geo(ax, geometry, facecolor,
                 ax.fill(xs, ys, facecolor=facecolor, edgecolor=edgecolor,
                         linewidth=linewidth,
                         zorder=2 if ring_idx == 0 else 3)
-    except Exception:
-        pass
+    except Exception as exc:
+        _LOGGER.debug("Geometry skipped: %s", exc)
 
 
 def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
@@ -1818,27 +1878,21 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         geom = row["geometry"]
         n = reviews_by_state.get(st_code)
         in_scope = (not filter_active) or (st_code in states)
-        
-        # If state is out of scope AND there's an active filter, don't draw text
-        # (keeps the focused map clean and avoids labels on top of labels).
-        if filter_active and not in_scope:
-            # Just draw a tiny grey label with the state code
-            pass
 
         try:
             gtype, coords = geom.get("type"), geom.get("coordinates")
             if not gtype or not coords:
                 continue
-            
+
             if gtype == "MultiPolygon":
                 coords = max(coords, key=lambda p: len(p[0]))
             elif gtype != "Polygon":
                 continue
-            
+
             ring = coords[0]
             if not ring:
                 continue
-                
+
             xs = [pt[0] for pt in ring]
             ys = [pt[1] for pt in ring]
             cx = (max(xs) + min(xs)) / 2
@@ -1849,13 +1903,13 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
 
         share = (100.0 * n / total_reviews
                  if (n is not None and total_reviews) else None)
-        
+
         if in_scope and n is not None:
             # Draw state code + values
             dx, dy = offsets.get(st_code, (0, 0))
             label = f"{st_code}\n{int(n):,}\n{share:.1f}%"
             color, weight = PALETTE.ink, "bold"
-            
+
             # We'll use ax.annotate for the offset states so the line draws
             # from the state's center to the label.
             if dx != 0 or dy != 0:
@@ -1892,7 +1946,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     cbar.ax.tick_params(labelsize=9)
     # Prevent the colorbar ticks from running together
     cbar.ax.xaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{int(x):,}"))
-    
+
     _finish(fig)
 
     # Insight block
@@ -1987,38 +2041,6 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
     )
 
 
-def render_headline_hero(year: str, states: tuple[str, ...]) -> None:
-    g = query_headline_gap(year, states)
-    scope = scope_label(year, states)
-    if g["gap"] is None:
-        body = ("Delivery punctuality is the strongest satisfaction driver "
-                "in this dataset. Only one delivery status appears in the "
-                "current selection — widen the filters to compare on-time "
-                "and late orders.")
-    else:
-        gap_pct_txt = (f"<b>{g['gap_pct']:.1f}%</b>"
-                       if g["gap_pct"] is not None else "—")
-        body = (
-            f'Late deliveries cost <b>{g["gap"]:.2f} stars</b> '
-            f'({gap_pct_txt}) — the single strongest satisfaction driver. '
-            f'On-time orders average <b>{g["on_time"]:.2f} stars</b>; '
-            f'late orders average <b>{g["late"]:.2f} stars</b>. '
-            f'This gap dwarfs every state-level difference.'
-        )
-    st.markdown(
-        f"""
-        <div class="hero-banner">
-          <div class="hero-icon">⚡</div>
-          <div class="hero-text">
-            <span class="hero-label">Headline finding · {scope}</span>
-            <p class="hero-headline">{body}</p>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
     g = query_headline_gap(year, states)
     if g["gap"] is None:
@@ -2057,22 +2079,26 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
     d2.metric("Late Avg Score",
               "—" if g["late"] is None else f"{g['late']:.2f}★",
               delta=f"n={g['n_late']:,}", delta_color="off")
-    
-    # Updated label to be clearer
+
     d3.metric("Star Gap (Driver)", f"{g['gap']:.2f}★",
-              delta=(f"Drop from on-time baseline" if g["gap_pct"] is not None else None),
+              delta=("Drop from on-time baseline"
+                     if g["gap_pct"] is not None else None),
               delta_color="off")
-              
-    # Updated caption to explain the 40.2% clearly
-    st.caption(
-        "The 1.73★ gap means late orders score **40.2% lower** than on-time orders. "
-        "A gap above 1.00★ (≈25% of the on-time score) makes delivery "
-        "punctuality the highest-ROI lever for satisfaction improvement."
-    )
+
+    gap_pct = g.get("gap_pct")
+    if gap_pct is not None:
+        claim = (
+            f"This selection's **{gap_pct:.1f}%** gap is "
+            + ("above" if gap_pct > 25 else "below")
+            + " the 25% threshold that makes delivery punctuality "
+            "the highest-ROI lever for satisfaction improvement."
+        )
+    else:
+        claim = "Widen the filters to compute the on-time vs late gap."
+    st.caption(claim)
 
 
 def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
-    k = query_kpis(year, states)
     g = query_headline_gap(year, states)
 
     if g["gap"] is None:
@@ -2090,7 +2116,7 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
         f"""
         <div class="exec-summary">
           <div class="exec-summary-main">
-            <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY</div>
+            <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY · WHOLE-DATASET BASELINE</div>
             <div class="exec-summary-title">
               Delivery punctuality is the <b>#1 satisfaction lever</b>
             </div>
@@ -2361,58 +2387,65 @@ def render_priority_matrix() -> None:
 GLOBAL_CSS: Final[str] = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 
 <style>
   :root {
-    /* WCAG-AA palette */
+    /* WCAG-AA palette (mirrors Palette dataclass) */
     --brand:        #4F46E5;
     --brand-light:  #A5B4FC;
     --brand-dark:   #3730A3;
-    --accent:       #EA580C;
-    --accent-light: #FDBA74;
-    --success:      #059669;
-    --success-dk:   #047857;
-    --warn:         #D97706;
-    --warn-dk:      #92400E;
-    --danger:       #E11D48;
-    --danger-dk:    #9F1239;
-    --ink:          #0F172A;
-    --ink-soft:     #1E293B;
-    --slate-700:    #334155;
-    --slate-600:    #475569;
-    --slate-500:    #64748B;
-    --slate-400:    #94A3B8;
-    --slate-300:    #CBD5E1;
-    --slate-200:    #E2E8F0;
-    --slate-100:    #F1F5F9;
-    --slate-50:     #F8FAFC;
+    --accent:       #0F766E;
+    --accent-light: #5EEAD4;
+    --success:      #047857;
+    --success-dk:   #064E3B;
+    --warn:         #B45309;
+    --warn-dk:      #78350F;
+    --danger:       #BE123C;
+    --danger-dk:    #881337;
+    --ink:          #1C1917;
+    --ink-soft:     #292524;
+    --slate-700:    #44403C;
+    --slate-600:    #57534E;
+    --slate-500:    #78716C;
+    --slate-400:    #A8A29E;
+    --slate-300:    #D6D3D1;
+    --slate-200:    #E7E5E4;
+    --slate-100:    #F5F5F4;
+    --slate-50:     #FAFAF9;
     /* 8-pt spacing scale */
     --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
     --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
-    /* Modular type scale (1.200) at 16 px base */
-    --fs-display: 2.25rem;
-    --fs-h1:      1.75rem;
-    --fs-h2:      1.375rem;
-    --fs-h3:      1.125rem;
-    --fs-body:    0.9375rem;
-    --fs-small:   0.8125rem;
-    --fs-micro:   0.6875rem;
+    /* Modular type scale (1.200) on 16px base */
+    --fs-display: 2.5rem;    /* 40px */
+    --fs-h1:      2rem;      /* 32px */
+    --fs-h2:      1.5rem;    /* 24px */
+    --fs-h3:      1.25rem;   /* 20px */
+    --fs-h4:      1.0625rem; /* 17px */
+    --fs-body:    1rem;      /* 16px */
+    --fs-small:   0.875rem;  /* 14px */
+    --fs-micro:   0.75rem;   /* 12px */
+    /* Line-heights */
+    --lh-tight:   1.15;
+    --lh-heading: 1.3;
+    --lh-body:    1.6;
+    --lh-caption: 1.5;
+    /* Radii + shadows */
     --radius-sm:  6px;
     --radius-md:  10px;
     --radius-lg:  14px;
     --radius-xl:  20px;
-    --shadow-sm:  0 1px 2px rgba(15,23,42,0.04),
-                  0 1px 3px rgba(15,23,42,0.06);
-    --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
-                  0 10px 24px rgba(15,23,42,0.06);
+    --shadow-sm:  0 1px 2px rgba(28,25,23,0.04),
+                  0 1px 3px rgba(28,25,23,0.06);
+    --shadow-md:  0 4px 6px rgba(28,25,23,0.04),
+                  0 10px 24px rgba(28,25,23,0.06);
     --shadow-brand: 0 4px 12px rgba(79,70,229,0.22);
   }
 
   html, body, [class*="css"], .stApp {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
-    font-size: 15px;
-    line-height: 1.6;
+    font-size: var(--fs-body);
+    line-height: var(--lh-body);
     color: var(--ink);
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -2421,22 +2454,24 @@ GLOBAL_CSS: Final[str] = """
 
   h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
   .hero-label, .exec-summary-eyebrow {
-    font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
-    letter-spacing: -0.025em;
+    font-family: 'Instrument Sans', 'Inter', system-ui, sans-serif !important;
+    letter-spacing: -0.02em;
     color: var(--ink);
+    line-height: var(--lh-heading);
   }
+  h1, .app-hero-title { line-height: var(--lh-tight); }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
   .app-hero {
     display: flex;
     align-items: center;
     gap: var(--s6);
-    background: linear-gradient(135deg, #EEF2FF 0%, #FFFFFF 60%, #FFF7ED 100%);
+    background: linear-gradient(135deg, #F0FDFA 0%, #FFFFFF 55%, #EEF2FF 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 8px 32px rgba(79,70,229,0.10);
+    box-shadow: 0 8px 32px rgba(15,118,110,0.10);
   }
   .app-hero-logo {
     flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
@@ -2445,50 +2480,50 @@ GLOBAL_CSS: Final[str] = """
   .app-hero-eyebrow {
     font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--brand); margin-bottom: var(--s3);
-    font-family: 'Sora', sans-serif !important;
+    color: var(--accent); margin-bottom: var(--s3);
+    font-family: 'Instrument Sans', sans-serif !important;
   }
   .app-hero-title {
     font-size: var(--fs-display) !important; font-weight: 800 !important;
-    color: var(--ink) !important; line-height: 1.1 !important;
+    color: var(--ink) !important; line-height: var(--lh-tight) !important;
     margin: 0 0 var(--s3) 0 !important; padding: 0 !important;
     letter-spacing: -0.03em !important; display: block;
   }
   .app-hero-title b {
-    color: var(--brand-dark);
-    background: linear-gradient(120deg, var(--brand) 0%, var(--accent) 100%);
+    color: var(--accent);
+    background: linear-gradient(120deg, var(--accent) 0%, var(--brand) 100%);
     -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
   }
   @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
     .app-hero-title b {
-      color: var(--brand) !important; background: none !important;
-      -webkit-text-fill-color: var(--brand) !important;
+      color: var(--accent) !important; background: none !important;
+      -webkit-text-fill-color: var(--accent) !important;
     }
   }
   .app-hero-sub {
     font-size: var(--fs-body); color: var(--slate-600);
-    margin: 0 0 var(--s4) 0; line-height: 1.6; max-width: 760px;
+    margin: 0 0 var(--s4) 0; line-height: var(--lh-body); max-width: 760px;
   }
   .app-hero-meta {
     display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
   }
 
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
-       line-height: 1.2; margin-bottom: var(--s3); }
+       line-height: var(--lh-tight); margin-bottom: var(--s3); }
   h2 { color: var(--ink); font-weight: 700; font-size: var(--fs-h2);
-       line-height: 1.3; margin-top: var(--s5) !important;
+       line-height: var(--lh-heading); margin-top: var(--s5) !important;
        margin-bottom: var(--s4) !important; }
   h3 { color: var(--ink-soft); font-weight: 700; font-size: var(--fs-h3);
-       line-height: 1.35; margin-top: 0 !important;
+       line-height: var(--lh-heading); margin-top: 0 !important;
        margin-bottom: var(--s3) !important; }
-  h4 { color: var(--brand); font-size: 1rem; font-weight: 700;
+  h4 { color: var(--brand); font-size: var(--fs-h4); font-weight: 700;
        line-height: 1.4; margin-bottom: var(--s3) !important; }
   p, li, span, label { color: var(--slate-700); font-size: var(--fs-body); }
   .stCaption, [data-testid="stCaptionContainer"] {
     color: var(--slate-500) !important;
     font-size: var(--fs-small) !important;
-    line-height: 1.55;
+    line-height: var(--lh-caption);
   }
 
   .block-container {
@@ -2501,85 +2536,86 @@ GLOBAL_CSS: Final[str] = """
 
   /* ── Sidebar ─────────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0F172A 0%, #1E1B4B 100%);
-    border-right: 1px solid #312E81;
+    background: linear-gradient(180deg, #1C1917 0%, #115E59 100%);
+    border-right: 1px solid #134E4A;
     padding-top: var(--s4);
   }
-  section[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
+  section[data-testid="stSidebar"] * { color: #E7E5E4 !important; }
   section[data-testid="stSidebar"] h1,
   section[data-testid="stSidebar"] h2,
   section[data-testid="stSidebar"] h3 {
     color: #FFFFFF !important; font-weight: 700;
-    font-family: 'Sora', sans-serif !important;
+    font-family: 'Instrument Sans', sans-serif !important;
   }
   section[data-testid="stSidebar"] .stSelectbox label,
   section[data-testid="stSidebar"] .stMultiSelect label {
-    color: #A5B4FC !important; font-weight: 600;
-    text-transform: uppercase; font-size: 0.7rem;
+    color: #5EEAD4 !important; font-weight: 600;
+    text-transform: uppercase; font-size: var(--fs-micro);
     letter-spacing: 0.08em;
   }
   section[data-testid="stSidebar"] hr {
     border-color: rgba(255,255,255,0.08) !important;
     margin: var(--s4) 0;
   }
-  section[data-testid="stSidebar"] table { color: #E2E8F0 !important; }
+  section[data-testid="stSidebar"] table { color: #E7E5E4 !important; }
   section[data-testid="stSidebar"] th,
   section[data-testid="stSidebar"] td {
-    color: #E2E8F0 !important;
-    border-color: #312E81 !important;
-    font-size: 0.78rem !important;
-    padding: 6px 10px !important;
+    color: #E7E5E4 !important;
+    border-color: #134E4A !important;
+    font-size: var(--fs-small) !important;
+    padding: var(--s2) var(--s3) !important;
   }
   section[data-testid="stSidebar"] .stButton > button {
-    background: var(--brand) !important; color: #FFFFFF !important;
+    background: var(--accent) !important; color: #FFFFFF !important;
     border-radius: var(--radius-md); font-weight: 600;
-    border: none; padding: 8px 14px;
+    border: none; padding: var(--s2) var(--s4);
     transition: background 0.15s ease, transform 0.1s ease;
   }
   section[data-testid="stSidebar"] .stButton > button:hover {
-    background: var(--brand-dark) !important;
+    background: var(--accent-light) !important;
+    color: var(--ink) !important;
     transform: translateY(-1px);
   }
 
   .sidebar-warning {
-    background: rgba(217,119,6,0.14);
-    border: 1px solid rgba(217,119,6,0.42);
-    border-left: 3px solid #D97706;
+    background: rgba(180,83,9,0.14);
+    border: 1px solid rgba(180,83,9,0.42);
+    border-left: 3px solid var(--warn);
     border-radius: var(--radius-md);
-    padding: 10px 12px;
+    padding: var(--s3) var(--s4);
     margin-top: var(--s3);
     font-size: var(--fs-small);
-    line-height: 1.5;
+    line-height: var(--lh-caption);
   }
-  .sidebar-warning strong { color: #FCD34D !important; display: block; margin-bottom: 4px; }
-  .sidebar-warning span   { color: #E2E8F0 !important; }
+  .sidebar-warning strong { color: #FCD34D !important; display: block; margin-bottom: var(--s1); }
+  .sidebar-warning span   { color: #E7E5E4 !important; }
 
   .sidebar-headline {
-    background: rgba(79,70,229,0.18);
-    border: 1px solid rgba(165,180,252,0.42);
-    border-left: 3px solid var(--brand-light);
+    background: rgba(15,118,110,0.20);
+    border: 1px solid rgba(94,234,212,0.42);
+    border-left: 3px solid var(--accent-light);
     border-radius: var(--radius-md);
-    padding: 12px 14px;
+    padding: var(--s3) var(--s4);
     margin-top: var(--s4);
-    line-height: 1.55;
+    line-height: var(--lh-caption);
   }
   .sidebar-headline-label {
-    font-size: 0.65rem; font-weight: 800; letter-spacing: 0.14em;
-    text-transform: uppercase; color: var(--brand-light) !important;
+    font-size: var(--fs-micro); font-weight: 800; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent-light) !important;
     margin-bottom: var(--s2);
   }
   .sidebar-headline strong {
     color: #FFFFFF !important; font-size: var(--fs-small); display: block;
-    margin-bottom: 4px;
+    margin-bottom: var(--s1);
   }
-  .sidebar-headline span { color: #CBD5E1 !important; font-size: 0.74rem; }
+  .sidebar-headline span { color: #D6D3D1 !important; font-size: var(--fs-small); }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
   /* ── Metrics ─────────────────────────────────────────────────────── */
   [data-testid="stMetric"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200);
-    border-left: 5px solid var(--brand);
+    border-left: 5px solid var(--accent);
     border-radius: var(--radius-lg);
     padding: var(--s5);
     box-shadow: var(--shadow-sm);
@@ -2589,11 +2625,11 @@ GLOBAL_CSS: Final[str] = """
   [data-testid="stMetric"]:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
-    border-left-color: var(--accent);
+    border-left-color: var(--brand);
   }
   [data-testid="stMetricLabel"] {
     color: var(--slate-500) !important;
-    font-size: 0.72rem !important;
+    font-size: var(--fs-micro) !important;
     font-weight: 600 !important;
     text-transform: uppercase;
     letter-spacing: 0.06em;
@@ -2604,14 +2640,14 @@ GLOBAL_CSS: Final[str] = """
     font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.85rem) !important;
     letter-spacing: -0.025em;
     line-height: 1.15;
-    font-family: 'Sora', 'Inter', system-ui, sans-serif !important;
+    font-family: 'Instrument Sans', 'Inter', system-ui, sans-serif !important;
     font-feature-settings: "tnum" 1, "ss01" 1;
-    margin-top: 4px;
+    margin-top: var(--s1);
   }
   [data-testid="stMetricDelta"] {
     font-weight: 600 !important;
-    font-size: 0.78rem !important;
-    margin-top: 4px;
+    font-size: var(--fs-small) !important;
+    margin-top: var(--s1);
   }
 
   /* ── Chart card container ────────────────────────────────────────── */
@@ -2638,33 +2674,34 @@ GLOBAL_CSS: Final[str] = """
     font-size: var(--fs-micro);
     font-weight: 800;
     letter-spacing: 0.08em;
-    padding: 3px 9px;
+    padding: var(--s1) var(--s3);
     border-radius: 999px;
     margin-bottom: var(--s3);
     text-transform: uppercase;
   }
-  .chip-action  { background: #FEE2E2; color: #9F1239; }
-  .chip-monitor { background: #FEF3C7; color: #92400E; }
-  .chip-fyi     { background: #E0E7FF; color: #3730A3; }
+  .chip-action  { background: #FFE4E6; color: #881337; }
+  .chip-monitor { background: #FEF3C7; color: #78350F; }
+  .chip-fyi     { background: #CCFBF1; color: #115E59; }
 
   /* ── Buttons / alerts / expanders ────────────────────────────────── */
   .stButton > button {
-    background: var(--brand); color: #FFFFFF;
+    background: var(--accent); color: #FFFFFF;
     border: none; border-radius: var(--radius-md);
-    padding: 10px 20px; font-weight: 600;
+    padding: var(--s3) var(--s5); font-weight: 600;
     font-size: var(--fs-body);
     transition: background 0.15s ease, transform 0.1s ease,
                 box-shadow 0.15s ease;
   }
   .stButton > button:hover {
-    background: var(--brand-dark);
+    background: var(--accent-light);
+    color: var(--ink);
     transform: translateY(-1px);
-    box-shadow: var(--shadow-brand);
+    box-shadow: 0 4px 12px rgba(15,118,110,0.22);
   }
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
     border-left: 4px solid var(--warn);
-    color: #78350F;
+    color: var(--warn-dk);
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
   }
@@ -2675,8 +2712,8 @@ GLOBAL_CSS: Final[str] = """
     margin-bottom: var(--s3);
   }
   [data-testid="stExpander"] summary {
-    font-weight: 600; color: var(--brand);
-    font-family: 'Sora', sans-serif !important;
+    font-weight: 600; color: var(--accent);
+    font-family: 'Instrument Sans', sans-serif !important;
     font-size: var(--fs-body);
   }
   .stSlider label {
@@ -2702,7 +2739,7 @@ GLOBAL_CSS: Final[str] = """
     justify-content: center;
     text-align: center;
     border-radius: var(--radius-md);
-    padding: 10px 16px !important;
+    padding: var(--s3) var(--s4) !important;
     border: 1px solid transparent;
     transition: background .15s ease, border-color .15s ease;
     cursor: pointer;
@@ -2721,20 +2758,43 @@ GLOBAL_CSS: Final[str] = """
     white-space: nowrap;
   }
   .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(135deg, var(--brand) 0%, var(--brand-dark) 100%);
-    border-color: var(--brand-light);
-    box-shadow: var(--shadow-brand);
+    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark, #115E59) 100%);
+    border-color: var(--accent-light);
+    box-shadow: 0 4px 12px rgba(15,118,110,0.28);
   }
   .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) p {
     color: #FFFFFF !important;
     font-weight: 700 !important;
   }
 
+  /* ── Tab takeaway strip ──────────────────────────────────────────── */
+  .takeaway-strip {
+    display: flex; align-items: center; gap: var(--s3);
+    background: linear-gradient(90deg, #F0FDFA 0%, #FFFFFF 100%);
+    border: 1px solid var(--accent-light);
+    border-left: 4px solid var(--accent);
+    border-radius: var(--radius-md);
+    padding: var(--s2) var(--s4);
+    margin: 0 0 var(--s4) 0;
+  }
+  .takeaway-label {
+    flex-shrink: 0;
+    font-size: var(--fs-micro); font-weight: 800;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent);
+    padding-right: var(--s3);
+    border-right: 1px solid var(--accent-light);
+  }
+  .takeaway-body {
+    font-size: var(--fs-small); color: var(--slate-700);
+    line-height: var(--lh-caption);
+  }
+
   /* ── Info card ───────────────────────────────────────────────────── */
   .info-card {
     position: relative; background: #FFFFFF;
     border: 1px solid var(--slate-200);
-    border-left: 5px solid var(--brand);
+    border-left: 5px solid var(--accent);
     border-radius: var(--radius-lg);
     padding: var(--s5);
     margin-bottom: var(--s4);
@@ -2747,10 +2807,10 @@ GLOBAL_CSS: Final[str] = """
   }
   .info-card.warn { border-left-color: var(--danger); }
   .info-card.ok   { border-left-color: var(--success); }
-  .info-card.info { border-left-color: var(--brand); }
+  .info-card.info { border-left-color: var(--accent); }
   .info-card.warn h4 { color: var(--danger); }
   .info-card.ok h4   { color: var(--success); }
-  .info-card.info h4 { color: var(--brand); }
+  .info-card.info h4 { color: var(--accent); }
   .info-card p, .info-card li {
     color: var(--slate-700); line-height: 1.7;
     font-size: var(--fs-body);
@@ -2758,7 +2818,7 @@ GLOBAL_CSS: Final[str] = """
   .info-card .tag {
     display: inline-block; background: var(--slate-100);
     color: var(--slate-600); border-radius: 999px;
-    padding: 4px 12px; font-size: 0.7rem;
+    padding: var(--s1) var(--s3); font-size: var(--fs-micro);
     font-weight: 600; margin-right: var(--s2); margin-bottom: var(--s2);
     letter-spacing: 0.03em;
   }
@@ -2779,15 +2839,15 @@ GLOBAL_CSS: Final[str] = """
     margin: var(--s4) 0;
   }
   .hero-banner {
-    background: linear-gradient(135deg, #EEF2FF 0%, #E0E7FF 55%, #C7D2FE 100%);
-    border: 1px solid #A5B4FC;
-    border-left: 4px solid var(--brand);
-    box-shadow: 0 2px 12px rgba(79,70,229,0.14);
+    background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 55%, #A7F3D0 100%);
+    border: 1px solid var(--accent-light);
+    border-left: 4px solid var(--accent);
+    box-shadow: 0 2px 12px rgba(15,118,110,0.14);
   }
   .headline-strip {
-    background: linear-gradient(90deg, #EEF2FF 0%, #FFFFFF 100%);
-    border: 1px solid #C7D2FE;
-    border-left: 4px solid var(--brand);
+    background: linear-gradient(90deg, #F0FDFA 0%, #FFFFFF 100%);
+    border: 1px solid var(--accent-light);
+    border-left: 4px solid var(--accent);
   }
   .hero-banner .hero-icon, .headline-strip-icon {
     font-size: 22px; line-height: 1; flex-shrink: 0;
@@ -2798,44 +2858,44 @@ GLOBAL_CSS: Final[str] = """
   .headline-strip .headline-strip-label {
     display: block; font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--brand); margin-bottom: 4px;
+    color: var(--accent); margin-bottom: var(--s1);
   }
   .hero-banner .hero-headline,
   .headline-strip-text p {
     font-size: var(--fs-body); font-weight: 500;
-    color: var(--slate-700); line-height: 1.6;
+    color: var(--slate-700); line-height: var(--lh-body);
     margin: 0; letter-spacing: normal;
   }
   .hero-banner .hero-headline b,
   .headline-strip-text b {
-    color: var(--brand-dark); font-weight: 700;
+    color: var(--accent-dark, #115E59); font-weight: 700;
   }
 
   /* ── Executive summary ───────────────────────────────────────────── */
   .exec-summary {
     display: flex; align-items: stretch; gap: var(--s5);
-    background: linear-gradient(135deg, #FFFFFF 0%, #F5F3FF 100%);
+    background: linear-gradient(135deg, #FFFFFF 0%, #F0FDFA 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-lg);
     padding: var(--s5) var(--s6);
     margin: var(--s4) 0;
-    box-shadow: 0 4px 16px rgba(79,70,229,0.08);
+    box-shadow: 0 4px 16px rgba(15,118,110,0.08);
   }
   .exec-summary-main { flex: 1; min-width: 0; }
   .exec-summary-eyebrow {
     font-size: var(--fs-micro); font-weight: 800;
-    letter-spacing: 0.16em; color: var(--brand);
+    letter-spacing: 0.16em; color: var(--accent);
     margin-bottom: var(--s2);
   }
   .exec-summary-title {
     font-size: var(--fs-h2); font-weight: 800;
-    color: var(--ink); line-height: 1.3;
+    color: var(--ink); line-height: var(--lh-heading);
     margin-bottom: var(--s3);
   }
-  .exec-summary-title b { color: var(--brand-dark); }
+  .exec-summary-title b { color: var(--accent); }
   .exec-summary-detail {
     color: var(--slate-600); font-size: var(--fs-body);
-    line-height: 1.65;
+    line-height: var(--lh-body);
   }
   .exec-summary-badge {
     display: flex; flex-direction: column; justify-content: center;
@@ -2845,25 +2905,25 @@ GLOBAL_CSS: Final[str] = """
     flex-shrink: 0;
   }
   .exec-summary-badge-label {
-    font-size: 0.65rem; font-weight: 800;
+    font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
     opacity: 0.85; margin-bottom: var(--s2); color: inherit;
   }
   .exec-summary-badge-value {
-    font-family: 'Sora', sans-serif; font-weight: 800;
-    font-size: 1.05rem; line-height: 1.2; color: inherit;
+    font-family: 'Instrument Sans', sans-serif; font-weight: 800;
+    font-size: var(--fs-h4); line-height: 1.2; color: inherit;
   }
 
   /* ── Action bar (decision banner under exec summary) ─────────────── */
   .action-bar {
     display: flex; align-items: center; gap: var(--s4);
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDF4 100%);
-    border: 1px solid #6EE7B7;
+    border: 1px solid var(--success-light, #6EE7B7);
     border-left: 4px solid var(--success);
     border-radius: var(--radius-lg);
     padding: var(--s3) var(--s5);
     margin: var(--s3) 0 var(--s4) 0;
-    box-shadow: 0 2px 8px rgba(5,150,105,0.10);
+    box-shadow: 0 2px 8px rgba(4,120,87,0.10);
   }
   .action-bar-label {
     flex-shrink: 0;
@@ -2875,7 +2935,7 @@ GLOBAL_CSS: Final[str] = """
   }
   .action-bar-body {
     color: var(--slate-700);
-    font-size: var(--fs-small); line-height: 1.6;
+    font-size: var(--fs-small); line-height: var(--lh-body);
   }
   .action-bar-body b { color: var(--ink); }
 
@@ -2884,29 +2944,29 @@ GLOBAL_CSS: Final[str] = """
     background: #FEF3C7; border-left: 4px solid var(--warn);
     border-radius: var(--radius-lg); padding: var(--s4) var(--s5);
     margin-bottom: var(--s4);
-    font-size: var(--fs-body); color: #78350F; line-height: 1.6;
+    font-size: var(--fs-body); color: var(--warn-dk); line-height: var(--lh-body);
   }
   .overview-banner b { color: #92400E; }
 
   /* ── Scope pills ─────────────────────────────────────────────────── */
   .scope-pill {
     display: inline-block;
-    background: linear-gradient(135deg, var(--brand) 0%, var(--accent) 100%);
+    background: linear-gradient(135deg, var(--accent) 0%, var(--brand) 100%);
     color: #FFFFFF; border-radius: 999px;
-    padding: 6px 14px; font-size: var(--fs-small); font-weight: 600;
-    box-shadow: 0 2px 10px rgba(79,70,229,0.28);
+    padding: var(--s2) var(--s4); font-size: var(--fs-small); font-weight: 600;
+    box-shadow: 0 2px 10px rgba(15,118,110,0.28);
   }
   .scope-pill-subtle {
     display: inline-block; background: var(--slate-100);
     color: var(--slate-700); border: 1px solid var(--slate-200);
-    border-radius: 999px; padding: 6px 14px;
+    border-radius: 999px; padding: var(--s2) var(--s4);
     font-size: var(--fs-small); font-weight: 600;
   }
 
   /* ── Insight box ─────────────────────────────────────────────────── */
   .insight {
     display: flex; gap: var(--s3); align-items: flex-start;
-    background: #F5F3FF; border-left: 3px solid var(--brand-light);
+    background: #F0FDFA; border-left: 3px solid var(--accent-light);
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin-top: var(--s3);
@@ -2914,29 +2974,29 @@ GLOBAL_CSS: Final[str] = """
   }
   .insight-chip {
     flex-shrink: 0;
-    background: var(--brand); color: #FFFFFF;
-    padding: 3px 10px; border-radius: 999px;
+    background: var(--accent); color: #FFFFFF;
+    padding: var(--s1) var(--s3); border-radius: 999px;
     font-size: var(--fs-micro); font-weight: 700; white-space: nowrap;
   }
-  .insight-body { display: flex; flex-direction: column; gap: 2px; }
+  .insight-body { display: flex; flex-direction: column; gap: var(--s1); }
   .insight-scope {
-    font-size: var(--fs-micro); font-weight: 700; color: var(--brand);
+    font-size: var(--fs-micro); font-weight: 700; color: var(--accent);
     text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.9;
   }
-  .insight-text { color: var(--slate-600); line-height: 1.6; }
+  .insight-text { color: var(--slate-600); line-height: var(--lh-body); }
   .insight-text b { color: var(--ink); font-weight: 700; }
   .insight-impl {
-    display: block; margin-top: 8px; padding-top: 8px;
-    border-top: 1px dashed var(--brand-light);
+    display: block; margin-top: var(--s2); padding-top: var(--s2);
+    border-top: 1px dashed var(--accent-light);
     color: var(--ink-soft); font-weight: 500;
   }
-  .insight-text .insight-impl b { color: var(--brand-dark); }
+  .insight-text .insight-impl b { color: var(--accent); }
 
   /* ── Verdict card ────────────────────────────────────────────────── */
   .verdict-card {
-    display: flex; flex-direction: column; gap: 4px;
+    display: flex; flex-direction: column; gap: var(--s1);
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
-    border: 1px solid #6EE7B7; border-left: 4px solid var(--success);
+    border: 1px solid var(--accent-light); border-left: 4px solid var(--success);
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin: var(--s3) 0;
@@ -2947,7 +3007,7 @@ GLOBAL_CSS: Final[str] = """
     color: var(--success-dk);
   }
   .verdict-text {
-    font-size: var(--fs-small); color: var(--slate-700); line-height: 1.6;
+    font-size: var(--fs-small); color: var(--slate-700); line-height: var(--lh-body);
   }
   .verdict-text b { color: var(--ink); }
 
@@ -2960,12 +3020,12 @@ GLOBAL_CSS: Final[str] = """
   }
   .empty-icon { font-size: 40px; }
   .empty-title {
-    font-size: 1.1rem; font-weight: 700; color: var(--slate-700);
-    margin: var(--s2) 0; font-family: 'Sora', sans-serif;
+    font-size: var(--fs-h4); font-weight: 700; color: var(--slate-700);
+    margin: var(--s2) 0; font-family: 'Instrument Sans', sans-serif;
   }
   .empty-body { color: var(--slate-500); font-size: var(--fs-body); }
   .empty-hint {
-    margin-top: var(--s3); color: var(--brand);
+    margin-top: var(--s3); color: var(--accent);
     font-size: var(--fs-small); font-weight: 500;
   }
 
@@ -2979,7 +3039,7 @@ GLOBAL_CSS: Final[str] = """
 
   /* ── Accessibility ───────────────────────────────────────────────── */
   :focus-visible {
-    outline: 3px solid #818CF8 !important;
+    outline: 3px solid var(--brand-light) !important;
     outline-offset: 2px !important;
     border-radius: 6px;
   }
@@ -2989,7 +3049,7 @@ GLOBAL_CSS: Final[str] = """
     text-rendering: optimizeLegibility;
   }
   .stCaption, [data-testid="stCaptionContainer"] {
-    line-height: 1.55;
+    line-height: var(--lh-caption);
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -3011,7 +3071,7 @@ GLOBAL_CSS: Final[str] = """
   @media (max-width: 768px) {
     .block-container { padding: var(--s3) !important; }
     .app-hero { padding: var(--s5) var(--s4); }
-    .app-hero-title { font-size: 1.75rem !important; }
+    .app-hero-title { font-size: var(--fs-h1) !important; }
     .hero-banner, .headline-strip {
       flex-direction: column; align-items: flex-start;
     }
@@ -3036,24 +3096,24 @@ def _apply_global_style() -> None:
             "figure.facecolor":   "#FFFFFF",
             "axes.facecolor":     "#FFFFFF",
             "axes.grid":          False,
-            "grid.color":         "#E2E8F0",
+            "grid.color":         "#E7E5E4",
             "grid.linewidth":     0.8,
             "axes.spines.top":    False,
             "axes.spines.right":  False,
             "axes.spines.left":   False,
             "axes.spines.bottom": True,
-            "axes.edgecolor":     "#CBD5E1",
+            "axes.edgecolor":     "#D6D3D1",
             "axes.linewidth":     0.9,
             "font.family":        "sans-serif",
             "font.size":          11,
             "axes.titlesize":     14,
             "axes.titleweight":   "bold",
-            "axes.titlecolor":    "#0F172A",
+            "axes.titlecolor":    "#1C1917",
             "axes.titlelocation": "left",
             "axes.labelsize":     11,
-            "axes.labelcolor":    "#475569",
-            "xtick.color":        "#64748B",
-            "ytick.color":        "#64748B",
+            "axes.labelcolor":    "#57534E",
+            "xtick.color":        "#78716C",
+            "ytick.color":        "#78716C",
             "xtick.labelsize":    10,
             "ytick.labelsize":    10,
             "legend.frameon":     False,
@@ -3151,6 +3211,14 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
             st.sidebar.button("↺  Reset filters", on_click=_reset_filters)
 
     st.sidebar.divider()
+    st.sidebar.checkbox(
+        "🎬  Story mode (hide filters for presentation)",
+        key="story_mode",
+        help="Hides the sidebar and footer so the active tab fills the "
+             "screen — ideal when projecting during a demo.",
+    )
+
+    st.sidebar.divider()
     try:
         render_headline_sidebar(year, states_tuple)
     except Exception as exc:
@@ -3230,24 +3298,26 @@ def render_overview(year: str, states: tuple[str, ...],
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
     # GMV is definition-gated (see §1.x). It renders only when a definition
-    # is set, and the caption states which one — so the figure is never
-    # reported under an ambiguous label.
-    gmv = query_gmv(year, states)
+    # is set; the definition value is passed explicitly so the cache key
+    # reflects it (default arguments are evaluated once at def time).
+    gmv = query_gmv(year, states, GMV_DEFINITION)
     if gmv is not None:
+        gcols = st.columns(1, gap="medium")
         label = ("GMV · merchandise excl. freight"
                  if gmv["definition"] == "A"
                  else "GMV · incl. freight")
-        st.metric(label, f"R$ {gmv['gmv']:,.0f}")
-        st.caption(
-            f"GMV definition **{gmv['definition']}** — {label.lower()}, "
-            f"order-grain deduped, delivered orders only "
-            f"({gmv['orders']:,} orders). Merchandise "
-            f"R$ {gmv['merchandise']:,.0f} · freight "
-            f"R$ {gmv['freight']:,.0f}. Definition {gmv['definition']} is "
-            f"chosen because it isolates the merchandise value from "
-            f"shipping cost; set `GMV_DEFINITION = \"B\"` to include "
-            f"freight instead."
-        )
+        with gcols[0]:
+            st.metric(label, f"R$ {gmv['gmv']:,.0f}")
+            st.caption(
+                f"GMV definition **{gmv['definition']}** — "
+                f"{label.lower()}, order-grain deduped, delivered orders "
+                f"only ({gmv['orders']:,} orders). Merchandise "
+                f"R$ {gmv['merchandise']:,.0f} · freight "
+                f"R$ {gmv['freight']:,.0f}. Definition {gmv['definition']} "
+                f"is chosen because it isolates the merchandise value from "
+                f"shipping cost; set `GMV_DEFINITION = \"B\"` to include "
+                f"freight instead."
+            )
 
     if filter_active:
         st.info(
@@ -3270,8 +3340,6 @@ def render_overview(year: str, states: tuple[str, ...],
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## ⭐ Customer Satisfaction")
-    
-    # Removed render_headline_hero to satisfy request to remove the banner
 
     try:
         render_decision_snapshot(year, states)
@@ -3388,7 +3456,9 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         """<p>Narrow selections (one state in one year) can contain only
         a few hundred reviews. Averages from small samples swing widely —
         read the <code>n=</code> labels before drawing conclusions. The
-        punctuality chart flags tiers below <b>n=30</b> with ⚠️.</p>""",
+        punctuality chart flags tiers below <b>n=30</b> with ⚠️, and the
+        review distribution withholds its population-level claim below
+        <b>n=200</b>.</p>""",
         variant="info", tags=["Sample size", "Filters"],
     )
     info_card(
@@ -3605,6 +3675,7 @@ def main() -> None:
     st.session_state.setdefault("filter_year", "All")
     st.session_state.setdefault("filter_states", [])
     st.session_state.setdefault("active_tab", NAV_TABS[0])
+    st.session_state.setdefault("story_mode", False)
 
     try:
         load_data(_data_signature())
@@ -3685,6 +3756,21 @@ def main() -> None:
     # In-page horizontal navigation (replaces the old sidebar radio).
     active_tab = render_nav_tabs()
 
+    # Story mode: hide sidebar + footer so the active tab fills the screen.
+    story_mode = bool(st.session_state.get("story_mode", False))
+    if story_mode:
+        st.markdown(
+            "<style>"
+            "section[data-testid='stSidebar']{display:none!important;}"
+            "[data-testid='stSidebarCollapsedControl']"
+            "{display:none!important;}"
+            "</style>",
+            unsafe_allow_html=True,
+        )
+
+    # Tab-level takeaway strip.
+    render_tab_takeaway(active_tab)
+
     st.write("")
     filter_active = year != "All" or bool(states)
 
@@ -3701,24 +3787,25 @@ def main() -> None:
         _LOGGER.exception("Main tab render failed")
         st.warning(f"⚠️ This tab could not render: {exc}")
 
-    st.divider()
-    st.caption(
-        f"**Reference (filters = All):** Total Orders "
-        f"{REF['total_orders']:,} · Delivered {REF['delivered_orders']:,} "
-        f"({100.0*REF['delivered_orders']/REF['total_orders']:.1f}%) · "
-        f"Avg Review {REF['avg_review_score']:.2f} · Late "
-        f"{REF['late_deliveries']:,} "
-        f"({100.0*REF['late_deliveries']/REF['delivered_orders']:.1f}% of "
-        f"delivered) · Avg Delivery Days {REF['avg_delivery_days']:.2f} · "
-        f"Headline gap {REF['star_gap']:.2f}★ "
-        f"({100.0*REF['star_gap']/REF['on_time_score']:.1f}%) — "
-        f"Q6: on-time {REF['on_time_score']:.2f} "
-        f"(n={REF['q6_on_time_orders']:,}) vs late "
-        f"{REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
-        "Every KPI, chart and insight line responds to the Year and State "
-        "filters, and reconciles to the verified SQL reference when both "
-        "are set to All."
-    )
+    if not story_mode:
+        st.divider()
+        st.caption(
+            f"**Reference (filters = All):** Total Orders "
+            f"{REF['total_orders']:,} · Delivered {REF['delivered_orders']:,} "
+            f"({100.0*REF['delivered_orders']/REF['total_orders']:.1f}%) · "
+            f"Avg Review {REF['avg_review_score']:.2f} · Late "
+            f"{REF['late_deliveries']:,} "
+            f"({100.0*REF['late_deliveries']/REF['delivered_orders']:.1f}% of "
+            f"delivered) · Avg Delivery Days {REF['avg_delivery_days']:.2f} · "
+            f"Headline gap {REF['star_gap']:.2f}★ "
+            f"({100.0*REF['star_gap']/REF['on_time_score']:.1f}%) — "
+            f"Q6: on-time {REF['on_time_score']:.2f} "
+            f"(n={REF['q6_on_time_orders']:,}) vs late "
+            f"{REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
+            "Every KPI, chart and insight line responds to the Year and State "
+            "filters, and reconciles to the verified SQL reference when both "
+            "are set to All."
+        )
 
 
 if __name__ == "__main__":
