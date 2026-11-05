@@ -58,7 +58,6 @@ from matplotlib.ticker import FuncFormatter
 
 CHART_FIGSIZE:      Final[tuple[float, float]] = (8.6, 4.8)
 CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
-CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (20.0, 5.0) # Widened for better spacing
 PARTIAL_YEARS:      Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
@@ -228,17 +227,6 @@ def fmt_pct(v: Any, p: int = 1) -> str:
     return "—" if n is None else f"{n:.{p}f}%"
 
 
-def fmt_currency(v: Any) -> str:
-    n = _safe_num(v)
-    if n is None:
-        return "—"
-    if n >= 1_000_000:
-        return f"R$ {n/1_000_000:.1f}M"
-    if n >= 1_000:
-        return f"R$ {n/1_000:.1f}K"
-    return f"R$ {n:.0f}"
-
-
 # ════════════════════════════════════════════════════════════════════════════
 # §2.y  STREAMLIT API SHIMS (version drift)
 # ════════════════════════════════════════════════════════════════════════════
@@ -390,11 +378,6 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
     orders    = frames["orders"].copy()
     customers = frames["customers"][["customer_id", "customer_state"]].copy()
     reviews   = frames["reviews"][["order_id", "review_score"]].copy()
-    
-    # Calculate order-level revenue from order_items
-    items = frames["order_items"][["order_id", "price"]].copy()
-    items["price"] = pd.to_numeric(items["price"], errors="coerce").fillna(0)
-    order_revenue = items.groupby("order_id", as_index=False)["price"].sum().rename(columns={"price": "revenue"})
 
     reviews["review_score"] = pd.to_numeric(
         reviews["review_score"], errors="coerce"
@@ -408,7 +391,6 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
     df = orders.merge(customers, on="customer_id", how="left")
     df = df.merge(reviews_order, on="order_id", how="left")
-    df = df.merge(order_revenue, on="order_id", how="left")
 
     for col in (
         "order_purchase_timestamp",
@@ -851,11 +833,10 @@ def _cohens_verdict(d: float) -> str:
 
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    st.markdown("### Delivery Punctuality vs Satisfaction & Revenue")
+    st.markdown("### Delivery Punctuality vs Satisfaction")
     st.caption(
         "Row-level on-time vs late anchors from Q6 · severity tiers use "
-        "order-grain means for the dose–response drill-down. "
-        "Revenue shows total price of 1–2★ orders."
+        "order-grain means for the dose–response drill-down."
     )
 
     q6 = query_headline_gap(year, states)
@@ -875,9 +856,6 @@ def chart_punctuality_vs_satisfaction(year: str,
         _no_data(); return
     model["severity"] = _late_severity(model["days_late"])
     model["is_detractor"] = model["review_score_order"].le(2)
-    
-    # Calculate revenue specifically for detractors
-    model["revenue_at_risk"] = model["revenue"].where(model["is_detractor"], 0.0)
 
     tier_order = ["On Time", "Slightly Late", "Moderately Late", "Severely Late"]
     grp = (
@@ -887,8 +865,6 @@ def chart_punctuality_vs_satisfaction(year: str,
                  avg_score=("review_score_order", "mean"),
                  detractor_rate=("is_detractor", "mean"),
                  avg_days_late=("days_late", "mean"),
-                 total_rev_at_risk=("revenue_at_risk", "sum"),
-                 total_revenue=("revenue", "sum"),
              )
              .reindex(tier_order)
              .dropna(subset=["orders"])
@@ -900,9 +876,6 @@ def chart_punctuality_vs_satisfaction(year: str,
     if total_orders <= 0:
         _no_data(); return
     grp["tier_share"] = (100.0 * grp["orders"] / total_orders).round(1)
-    
-    # Calculate the selection average for the what-if scenario
-    sel_avg = float((grp["avg_score"] * grp["orders"]).sum() / total_orders)
 
     tier_colors = {
         "On Time":         PALETTE.success,
@@ -913,58 +886,34 @@ def chart_punctuality_vs_satisfaction(year: str,
     colors = [tier_colors.get(str(t), PALETTE.slate_400) for t in grp.index]
 
     fig, axes = plt.subplots(
-        1, 3, figsize=CHART_FIGSIZE_TRIPLE,
-        gridspec_kw={"wspace": 0.32, "width_ratios": [1.2, 1, 1]},
+        1, 2, figsize=CHART_FIGSIZE_WIDE,
+        gridspec_kw={"wspace": 0.32},
     )
-    ax1, ax2, ax3 = axes
+    ax1, ax2 = axes
 
-    # --- Subplot 1: Violin Plot of Mean Scores ---
-    # We need the raw scores to plot the distribution
-    plot_data = [model.loc[model["severity"] == s, "review_score_order"].dropna().values 
-                 for s in grp.index]
-    
-    parts = ax1.violinplot(
-        plot_data, positions=range(len(grp)), widths=0.6, showmeans=False,
-        showmedians=False, showextrema=False
-    )
-    
-    # Color the violins
-    for pc, color in zip(parts['bodies'], colors):
-        pc.set_facecolor(color)
-        pc.set_edgecolor(PALETTE.white)
-        pc.set_alpha(0.85)
-        
-    # Add a thin box plot inside the violin
-    ax1.boxplot(
-        plot_data, positions=range(len(grp)), widths=0.12, patch_artist=True,
-        showfliers=False, 
-        boxprops=dict(facecolor=PALETTE.white, color=PALETTE.slate_500, linewidth=1),
-        medianprops=dict(color=PALETTE.slate_700, linewidth=1.5),
-        whiskerprops=dict(color=PALETTE.slate_500, linewidth=1),
-        capprops=dict(color=PALETTE.slate_500, linewidth=1)
-    )
-    
-    # Add a marker for the mean
-    means = [g["avg_score"] for _, g in grp.iterrows()]
-    ax1.scatter(range(len(grp)), means, color=PALETTE.white, edgecolor=PALETTE.ink, 
-                s=40, zorder=5, label="Mean")
-
-    ax1.set_xticks(range(len(grp)))
-    ax1.set_xticklabels(grp.index.astype(str))
-    ax1.set_title("Score distribution by lateness severity", pad=10, loc="left", fontsize=12)
+    bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
+                    width=0.62)
+    ax1.set_title("Mean score by lateness severity",
+                  pad=10, loc="left", fontsize=12)
     ax1.set_ylabel("Avg review score (1–5)")
-    ax1.set_ylim(0.5, 5.5)
+    ax1.set_ylim(1, 5.4)
     _style_axes(ax1)
-    
-    for i, (_, row) in enumerate(grp.iterrows()):
-        # Use multi-line text to prevent horizontal overlap
-        label = f"{row['avg_score']:.2f}\nn={int(row['orders']):,}\n({row['tier_share']:.1f}%)"
-        if not row["reliable"]: label += " ⚠️"
-        # Position the text slightly above the violin peak
-        ax1.text(i, 5.2, label, ha="center", va="bottom", fontsize=9,
+    for b, s, n, share, reliable in zip(
+        bars1, grp["avg_score"], grp["orders"], grp["tier_share"],
+        grp["reliable"],
+    ):
+        label = f"{s:.2f}\nn={int(n):,} ({share:.1f}%)"
+        if not reliable: label += " ⚠️"
+        ax1.text(b.get_x() + b.get_width() / 2, s + 0.07,
+                 label, ha="center", va="bottom", fontsize=9,
                  color=PALETTE.slate_700, fontweight="bold")
 
-    # --- Subplot 2: Detractor Rate ---
+    sel_avg = _safe_mean(model["review_score_order"]) or 0.0
+    ax1.axhline(sel_avg, color=PALETTE.slate_500, linestyle="--",
+                linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
+    ax1.legend(loc="lower left", frameon=False, fontsize=9)
+
     dr_max = float((grp["detractor_rate"] * 100).max()) if len(grp) else 0.0
     ymax = max(5.0, dr_max * 1.25)
     bars2 = ax2.bar(grp.index.astype(str), grp["detractor_rate"] * 100,
@@ -974,13 +923,8 @@ def chart_punctuality_vs_satisfaction(year: str,
                   fontsize=12)
     ax2.set_ylabel("% of reviews that are 1–2★")
     ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
-    ax2.set_ylim(0, ymax + 10) # Add a bit of headroom
+    ax2.set_ylim(0, ymax)
     _style_axes(ax2)
-    
-    # Rotate x-axis labels to prevent overlap
-    ax2.set_xticks(range(len(grp)))
-    ax2.set_xticklabels(grp.index.astype(str), rotation=15, ha="right")
-    
     for b, p, reliable in zip(bars2, grp["detractor_rate"] * 100,
                               grp["reliable"]):
         label = f"{p:.1f}%"
@@ -988,32 +932,6 @@ def chart_punctuality_vs_satisfaction(year: str,
         ax2.text(b.get_x() + b.get_width() / 2, p + ymax * 0.02,
                  label, ha="center", va="bottom", fontsize=9,
                  color=PALETTE.slate_700, fontweight="bold")
-        
-    # --- Subplot 3: Revenue at Risk ---
-    rev_max = float(grp["total_rev_at_risk"].max()) if len(grp) else 0.0
-    rev_ymax = max(10.0, rev_max * 1.25)
-    bars3 = ax3.bar(grp.index.astype(str), grp["total_rev_at_risk"],
-                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
-                    width=0.62)
-    ax3.set_title("Revenue at Risk (from 1–2★ orders)", pad=10, loc="left",
-                  fontsize=12)
-    ax3.set_ylabel("Total Price (R$)")
-    ax3.yaxis.set_major_formatter(FuncFormatter(lambda v, _: fmt_currency(v)))
-    ax3.set_ylim(0, rev_ymax)
-    _style_axes(ax3)
-    
-    # Rotate x-axis labels to prevent overlap
-    ax3.set_xticks(range(len(grp)))
-    ax3.set_xticklabels(grp.index.astype(str), rotation=15, ha="right")
-    
-    for b, r, reliable in zip(bars3, grp["total_rev_at_risk"],
-                              grp["reliable"]):
-        label = fmt_currency(r)
-        if not reliable: label += " ⚠️"
-        ax3.text(b.get_x() + b.get_width() / 2, r + rev_ymax * 0.02,
-                 label, ha="center", va="bottom", fontsize=9,
-                 color=PALETTE.slate_700, fontweight="bold")
-
     _finish(fig)
 
     on_scores   = model.loc[model["severity"] == "On Time", "review_score_order"]
@@ -1141,9 +1059,6 @@ def chart_punctuality_vs_satisfaction(year: str,
     dr_mult = (top_dr / on_time_dr) if on_time_dr > 0 else float("nan")
     mult_txt = (f" — <b>{dr_mult:.1f}×</b> the on-time rate"
                 if dr_mult == dr_mult else "")
-                
-    # Calculate total revenue at risk across all tiers
-    total_rev_risk = float(grp["total_rev_at_risk"].sum())
 
     _insight(
         year, states,
@@ -1158,15 +1073,13 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"penalty is driven by <i>how badly</i> the promise is missed, not "
         f"merely by whether it is missed. This makes delivery punctuality "
         f"the strongest lever in the data, although it is an association, "
-        f"not proof of causation (see limitation L1). "
-        f"Financially, there is <b>{fmt_currency(total_rev_risk)}</b> in "
-        f"product revenue tied to these 1–2★ detractor orders.{noisy_txt}"
+        f"not proof of causation (see limitation L1).{noisy_txt}"
         + _impl(
             f"prioritise reliability over raw speed — keep promised "
             f"dates realistic, monitor fulfilment timelines and act "
             f"before the promised date passes — and focus on stopping "
             f"delays from becoming prolonged: <i>{top_det}</i> orders "
-            f"show the highest dissatisfaction and revenue at risk."
+            f"show the highest dissatisfaction."
         )
     )
     _partial_note(year)
@@ -2067,17 +1980,20 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
           <div class="exec-summary-main">
             <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY</div>
             <div class="exec-summary-title">
-              Delivery punctuality is the <b>#1 satisfaction level</b>
+              Delivery punctuality is the <b>#1 satisfaction lever</b>
             </div>
             <div class="exec-summary-detail">
               <p style="margin-bottom: 8px;">
-                The business maintains a generally positive sentiment, averaging <b>4.09★</b> across <b>99,441</b> orders. However, <b>8.1%</b> of delivered orders fail to meet their promised delivery date. Late deliveries are severely damaging customer loyalty. On-time orders average a healthy score, but late orders lose <b>1.73★ (40.2%)</b> on average. This is a statistically robust gap that dwarfs any geographic or product-category differences.
+                Delivery punctuality is the #1 satisfaction level. The business maintains a generally positive sentiment, averaging 4.09★ across 99,441 orders. However, 8.1% of delivered orders fail to meet their promised delivery date.
               </p>
               <p style="margin-bottom: 8px;">
-                The damage compounds over time. Orders delayed by just <b>1–3 days</b> see a sharp spike in 1–2★ reviews. If an order drifts past <b>20 days</b>, the detractor rate skyrockets, meaning customers are highly likely to leave a negative review and potentially churn.
+                Late deliveries are severely damaging customer loyalty. On-time orders average a healthy score, but late orders lose 1.73★ (40.2%) on average. This is a statistically robust gap that dwarfs any geographic or product-category differences.
+              </p>
+              <p style="margin-bottom: 8px;">
+                The damage compounds over time. Orders delayed by just 1–3 days see a sharp spike in 1–2★ reviews. If an order drifts past 20 days, the detractor rate skyrockets, meaning customers are highly likely to leave a negative review and potentially churn.
               </p>
               <p style="margin-bottom: 0;">
-                Shift the operational focus from <i>speed</i> to <i>reliability</i>. Implement early-warning interventions for orders approaching day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
+                Shift the operational focus from speed to reliability. Implement early-warning interventions for orders approaching day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
               </p>
             </div>
           </div>
@@ -3218,8 +3134,8 @@ def render_overview(year: str, states: tuple[str, ...],
 
 def render_theme(year: str, states: tuple[str, ...]) -> None:
     st.markdown("## ⭐ Customer Satisfaction")
-
-    # The render_headline_hero call has been removed as requested.
+    
+    # Removed render_headline_hero to satisfy request to remove the banner
 
     try:
         render_decision_snapshot(year, states)
