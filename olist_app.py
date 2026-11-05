@@ -58,6 +58,7 @@ from matplotlib.ticker import FuncFormatter
 
 CHART_FIGSIZE:      Final[tuple[float, float]] = (8.6, 4.8)
 CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
+CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (16.0, 4.8)
 PARTIAL_YEARS:      Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
@@ -227,6 +228,17 @@ def fmt_pct(v: Any, p: int = 1) -> str:
     return "—" if n is None else f"{n:.{p}f}%"
 
 
+def fmt_currency(v: Any) -> str:
+    n = _safe_num(v)
+    if n is None:
+        return "—"
+    if n >= 1_000_000:
+        return f"R$ {n/1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"R$ {n/1_000:.1f}K"
+    return f"R$ {n:.0f}"
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # §2.y  STREAMLIT API SHIMS (version drift)
 # ════════════════════════════════════════════════════════════════════════════
@@ -378,6 +390,11 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
     orders    = frames["orders"].copy()
     customers = frames["customers"][["customer_id", "customer_state"]].copy()
     reviews   = frames["reviews"][["order_id", "review_score"]].copy()
+    
+    # Calculate order-level revenue from order_items
+    items = frames["order_items"][["order_id", "price"]].copy()
+    items["price"] = pd.to_numeric(items["price"], errors="coerce").fillna(0)
+    order_revenue = items.groupby("order_id", as_index=False)["price"].sum().rename(columns={"price": "revenue"})
 
     reviews["review_score"] = pd.to_numeric(
         reviews["review_score"], errors="coerce"
@@ -391,6 +408,7 @@ def build_model(frames_fingerprint: str) -> pd.DataFrame:
 
     df = orders.merge(customers, on="customer_id", how="left")
     df = df.merge(reviews_order, on="order_id", how="left")
+    df = df.merge(order_revenue, on="order_id", how="left")
 
     for col in (
         "order_purchase_timestamp",
@@ -833,10 +851,11 @@ def _cohens_verdict(d: float) -> str:
 
 def chart_punctuality_vs_satisfaction(year: str,
                                       states: tuple[str, ...]) -> None:
-    st.markdown("### Delivery Punctuality vs Satisfaction")
+    st.markdown("### Delivery Punctuality vs Satisfaction & Revenue")
     st.caption(
         "Row-level on-time vs late anchors from Q6 · severity tiers use "
-        "order-grain means for the dose–response drill-down."
+        "order-grain means for the dose–response drill-down. "
+        "Revenue shows total price of 1–2★ orders."
     )
 
     q6 = query_headline_gap(year, states)
@@ -856,6 +875,9 @@ def chart_punctuality_vs_satisfaction(year: str,
         _no_data(); return
     model["severity"] = _late_severity(model["days_late"])
     model["is_detractor"] = model["review_score_order"].le(2)
+    
+    # Calculate revenue specifically for detractors
+    model["revenue_at_risk"] = model["revenue"].where(model["is_detractor"], 0.0)
 
     tier_order = ["On Time", "Slightly Late", "Moderately Late", "Severely Late"]
     grp = (
@@ -865,6 +887,8 @@ def chart_punctuality_vs_satisfaction(year: str,
                  avg_score=("review_score_order", "mean"),
                  detractor_rate=("is_detractor", "mean"),
                  avg_days_late=("days_late", "mean"),
+                 total_rev_at_risk=("revenue_at_risk", "sum"),
+                 total_revenue=("revenue", "sum"),
              )
              .reindex(tier_order)
              .dropna(subset=["orders"])
@@ -886,18 +910,19 @@ def chart_punctuality_vs_satisfaction(year: str,
     colors = [tier_colors.get(str(t), PALETTE.slate_400) for t in grp.index]
 
     fig, axes = plt.subplots(
-        1, 2, figsize=CHART_FIGSIZE_WIDE,
-        gridspec_kw={"wspace": 0.32},
+        1, 3, figsize=CHART_FIGSIZE_TRIPLE,
+        gridspec_kw={"wspace": 0.32, "width_ratios": [1, 1, 1]},
     )
-    ax1, ax2 = axes
+    ax1, ax2, ax3 = axes
 
+    # --- Subplot 1: Mean score ---
     bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
                     color=colors, edgecolor=PALETTE.white, linewidth=1.4,
                     width=0.62)
     ax1.set_title("Mean score by lateness severity",
                   pad=10, loc="left", fontsize=12)
     ax1.set_ylabel("Avg review score (1–5)")
-    ax1.set_ylim(1, 5.4)
+    ax1.set_ylim(1, 5.6)
     _style_axes(ax1)
     for b, s, n, share, reliable in zip(
         bars1, grp["avg_score"], grp["orders"], grp["tier_share"],
@@ -912,8 +937,9 @@ def chart_punctuality_vs_satisfaction(year: str,
     sel_avg = _safe_mean(model["review_score_order"]) or 0.0
     ax1.axhline(sel_avg, color=PALETTE.slate_500, linestyle="--",
                 linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
-    ax1.legend(loc="lower left", frameon=False, fontsize=9)
+    ax1.legend(loc="upper right", frameon=False, fontsize=9)
 
+    # --- Subplot 2: Detractor Rate ---
     dr_max = float((grp["detractor_rate"] * 100).max()) if len(grp) else 0.0
     ymax = max(5.0, dr_max * 1.25)
     bars2 = ax2.bar(grp.index.astype(str), grp["detractor_rate"] * 100,
@@ -923,7 +949,7 @@ def chart_punctuality_vs_satisfaction(year: str,
                   fontsize=12)
     ax2.set_ylabel("% of reviews that are 1–2★")
     ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
-    ax2.set_ylim(0, ymax)
+    ax2.set_ylim(0, ymax + 10) # Add a bit of headroom
     _style_axes(ax2)
     for b, p, reliable in zip(bars2, grp["detractor_rate"] * 100,
                               grp["reliable"]):
@@ -932,6 +958,27 @@ def chart_punctuality_vs_satisfaction(year: str,
         ax2.text(b.get_x() + b.get_width() / 2, p + ymax * 0.02,
                  label, ha="center", va="bottom", fontsize=9,
                  color=PALETTE.slate_700, fontweight="bold")
+        
+    # --- Subplot 3: Revenue at Risk ---
+    rev_max = float(grp["total_rev_at_risk"].max()) if len(grp) else 0.0
+    rev_ymax = max(10.0, rev_max * 1.25)
+    bars3 = ax3.bar(grp.index.astype(str), grp["total_rev_at_risk"],
+                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
+                    width=0.62)
+    ax3.set_title("Revenue at Risk (from 1–2★ orders)", pad=10, loc="left",
+                  fontsize=12)
+    ax3.set_ylabel("Total Price (R$)")
+    ax3.yaxis.set_major_formatter(FuncFormatter(lambda v, _: fmt_currency(v)))
+    ax3.set_ylim(0, rev_ymax)
+    _style_axes(ax3)
+    for b, r, reliable in zip(bars3, grp["total_rev_at_risk"],
+                              grp["reliable"]):
+        label = fmt_currency(r)
+        if not reliable: label += " ⚠️"
+        ax3.text(b.get_x() + b.get_width() / 2, r + rev_ymax * 0.02,
+                 label, ha="center", va="bottom", fontsize=9,
+                 color=PALETTE.slate_700, fontweight="bold")
+
     _finish(fig)
 
     on_scores   = model.loc[model["severity"] == "On Time", "review_score_order"]
@@ -1059,6 +1106,9 @@ def chart_punctuality_vs_satisfaction(year: str,
     dr_mult = (top_dr / on_time_dr) if on_time_dr > 0 else float("nan")
     mult_txt = (f" — <b>{dr_mult:.1f}×</b> the on-time rate"
                 if dr_mult == dr_mult else "")
+                
+    # Calculate total revenue at risk across all tiers
+    total_rev_risk = float(grp["total_rev_at_risk"].sum())
 
     _insight(
         year, states,
@@ -1073,13 +1123,15 @@ def chart_punctuality_vs_satisfaction(year: str,
         f"penalty is driven by <i>how badly</i> the promise is missed, not "
         f"merely by whether it is missed. This makes delivery punctuality "
         f"the strongest lever in the data, although it is an association, "
-        f"not proof of causation (see limitation L1).{noisy_txt}"
+        f"not proof of causation (see limitation L1). "
+        f"Financially, there is <b>{fmt_currency(total_rev_risk)}</b> in "
+        f"product revenue tied to these 1–2★ detractor orders.{noisy_txt}"
         + _impl(
             f"prioritise reliability over raw speed — keep promised "
             f"dates realistic, monitor fulfilment timelines and act "
             f"before the promised date passes — and focus on stopping "
             f"delays from becoming prolonged: <i>{top_det}</i> orders "
-            f"show the highest dissatisfaction."
+            f"show the highest dissatisfaction and revenue at risk."
         )
     )
     _partial_note(year)
