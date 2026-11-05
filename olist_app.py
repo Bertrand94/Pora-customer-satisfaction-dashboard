@@ -58,7 +58,7 @@ from matplotlib.ticker import FuncFormatter
 
 CHART_FIGSIZE:      Final[tuple[float, float]] = (8.6, 4.8)
 CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
-CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (16.0, 4.8)
+CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (18.0, 5.0)
 PARTIAL_YEARS:      Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
@@ -911,33 +911,54 @@ def chart_punctuality_vs_satisfaction(year: str,
 
     fig, axes = plt.subplots(
         1, 3, figsize=CHART_FIGSIZE_TRIPLE,
-        gridspec_kw={"wspace": 0.32, "width_ratios": [1, 1, 1]},
+        gridspec_kw={"wspace": 0.32, "width_ratios": [1.2, 1, 1]},
     )
     ax1, ax2, ax3 = axes
 
-    # --- Subplot 1: Mean score ---
-    bars1 = ax1.bar(grp.index.astype(str), grp["avg_score"],
-                    color=colors, edgecolor=PALETTE.white, linewidth=1.4,
-                    width=0.62)
-    ax1.set_title("Mean score by lateness severity",
-                  pad=10, loc="left", fontsize=12)
-    ax1.set_ylabel("Avg review score (1–5)")
-    ax1.set_ylim(1, 5.6)
-    _style_axes(ax1)
-    for b, s, n, share, reliable in zip(
-        bars1, grp["avg_score"], grp["orders"], grp["tier_share"],
-        grp["reliable"],
-    ):
-        label = f"{s:.2f}\nn={int(n):,} ({share:.1f}%)"
-        if not reliable: label += " ⚠️"
-        ax1.text(b.get_x() + b.get_width() / 2, s + 0.07,
-                 label, ha="center", va="bottom", fontsize=9,
-                 color=PALETTE.slate_700, fontweight="bold")
+    # --- Subplot 1: Violin Plot of Mean Scores ---
+    # We need the raw scores to plot the distribution
+    plot_data = [model.loc[model["severity"] == s, "review_score_order"].dropna().values 
+                 for s in grp.index]
+    
+    parts = ax1.violinplot(
+        plot_data, positions=range(len(grp)), widths=0.6, showmeans=False,
+        showmedians=False, showextrema=False
+    )
+    
+    # Color the violins
+    for pc, color in zip(parts['bodies'], colors):
+        pc.set_facecolor(color)
+        pc.set_edgecolor(PALETTE.white)
+        pc.set_alpha(0.85)
+        
+    # Add a thin box plot inside the violin
+    ax1.boxplot(
+        plot_data, positions=range(len(grp)), widths=0.12, patch_artist=True,
+        showfliers=False, 
+        boxprops=dict(facecolor=PALETTE.white, color=PALETTE.slate_500, linewidth=1),
+        medianprops=dict(color=PALETTE.slate_700, linewidth=1.5),
+        whiskerprops=dict(color=PALETTE.slate_500, linewidth=1),
+        capprops=dict(color=PALETTE.slate_500, linewidth=1)
+    )
+    
+    # Add a marker for the mean
+    means = [g["avg_score"] for _, g in grp.iterrows()]
+    ax1.scatter(range(len(grp)), means, color=PALETTE.white, edgecolor=PALETTE.ink, 
+                s=40, zorder=5, label="Mean")
 
-    sel_avg = _safe_mean(model["review_score_order"]) or 0.0
-    ax1.axhline(sel_avg, color=PALETTE.slate_500, linestyle="--",
-                linewidth=1.1, label=f"Selection avg {sel_avg:.2f}★")
-    ax1.legend(loc="upper right", frameon=False, fontsize=9)
+    ax1.set_xticks(range(len(grp)))
+    ax1.set_xticklabels(grp.index.astype(str))
+    ax1.set_title("Score distribution by lateness severity", pad=10, loc="left", fontsize=12)
+    ax1.set_ylabel("Avg review score (1–5)")
+    ax1.set_ylim(0.5, 5.5)
+    _style_axes(ax1)
+    
+    for i, (_, row) in enumerate(grp.iterrows()):
+        label = f"{row['avg_score']:.2f}\nn={int(row['orders']):,} ({row['tier_share']:.1f}%)"
+        if not row["reliable"]: label += " ⚠️"
+        # Position the text slightly above the violin peak
+        ax1.text(i, 5.2, label, ha="center", va="bottom", fontsize=9,
+                 color=PALETTE.slate_700, fontweight="bold")
 
     # --- Subplot 2: Detractor Rate ---
     dr_max = float((grp["detractor_rate"] * 100).max()) if len(grp) else 0.0
