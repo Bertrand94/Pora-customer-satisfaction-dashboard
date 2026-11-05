@@ -58,7 +58,7 @@ from matplotlib.ticker import FuncFormatter
 
 CHART_FIGSIZE:      Final[tuple[float, float]] = (8.6, 4.8)
 CHART_FIGSIZE_WIDE: Final[tuple[float, float]] = (13.5, 4.4)
-CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (18.0, 5.0)
+CHART_FIGSIZE_TRIPLE: Final[tuple[float, float]] = (20.0, 5.0) # Widened for better spacing
 PARTIAL_YEARS:      Final[frozenset[str]] = frozenset({"2016", "2018"})
 
 PUNCT_MIN_N_TIER:   Final[int] = 30
@@ -900,6 +900,9 @@ def chart_punctuality_vs_satisfaction(year: str,
     if total_orders <= 0:
         _no_data(); return
     grp["tier_share"] = (100.0 * grp["orders"] / total_orders).round(1)
+    
+    # Calculate the selection average for the what-if scenario
+    sel_avg = float((grp["avg_score"] * grp["orders"]).sum() / total_orders)
 
     tier_colors = {
         "On Time":         PALETTE.success,
@@ -954,7 +957,8 @@ def chart_punctuality_vs_satisfaction(year: str,
     _style_axes(ax1)
     
     for i, (_, row) in enumerate(grp.iterrows()):
-        label = f"{row['avg_score']:.2f}\nn={int(row['orders']):,} ({row['tier_share']:.1f}%)"
+        # Use multi-line text to prevent horizontal overlap
+        label = f"{row['avg_score']:.2f}\nn={int(row['orders']):,}\n({row['tier_share']:.1f}%)"
         if not row["reliable"]: label += " ⚠️"
         # Position the text slightly above the violin peak
         ax1.text(i, 5.2, label, ha="center", va="bottom", fontsize=9,
@@ -972,6 +976,11 @@ def chart_punctuality_vs_satisfaction(year: str,
     ax2.yaxis.set_major_formatter(FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax2.set_ylim(0, ymax + 10) # Add a bit of headroom
     _style_axes(ax2)
+    
+    # Rotate x-axis labels to prevent overlap
+    ax2.set_xticks(range(len(grp)))
+    ax2.set_xticklabels(grp.index.astype(str), rotation=15, ha="right")
+    
     for b, p, reliable in zip(bars2, grp["detractor_rate"] * 100,
                               grp["reliable"]):
         label = f"{p:.1f}%"
@@ -992,6 +1001,11 @@ def chart_punctuality_vs_satisfaction(year: str,
     ax3.yaxis.set_major_formatter(FuncFormatter(lambda v, _: fmt_currency(v)))
     ax3.set_ylim(0, rev_ymax)
     _style_axes(ax3)
+    
+    # Rotate x-axis labels to prevent overlap
+    ax3.set_xticks(range(len(grp)))
+    ax3.set_xticklabels(grp.index.astype(str), rotation=15, ha="right")
+    
     for b, r, reliable in zip(bars3, grp["total_rev_at_risk"],
                               grp["reliable"]):
         label = fmt_currency(r)
