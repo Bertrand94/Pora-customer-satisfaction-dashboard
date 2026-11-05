@@ -160,6 +160,31 @@ CONFIG  = Config()
 PALETTE = Palette()
 
 # ════════════════════════════════════════════════════════════════════════════
+# §1.x  GMV DEFINITION SWITCH
+# ════════════════════════════════════════════════════════════════════════════
+#
+# GMV is intentionally NOT surfaced as a KPI until its definition is fixed.
+# Candidate definitions and their trade-offs:
+#   A) sum(order_items.price) for delivered, non-cancelled orders,
+#      order-grain deduped          → closest to "merchandise GMV"; excludes
+#                                     freight (the conventional Olist reading).
+#   B) A + sum(order_items.freight_value)
+#                                   → "gross order value incl. shipping".
+#   C) sum(payments.payment_value)  → "cash collected"; needs the payments
+#                                     CSV, which is NOT in CONFIG.tables.
+#
+# The model here has no payment table, and reviews are row-level (L3 fan-out:
+# 99,224 rows across 98,673 orders). Any GMV must therefore dedupe to order
+# grain before summing, and definition C cannot be computed honestly with the
+# four CSVs this app loads. Until a definition is chosen, query_gmv returns
+# None and no GMV tile is rendered — the app will not fabricate a figure
+# under an ambiguous label.
+#
+# Set GMV_DEFINITION to "A" or "B" to enable the Overview tile. The tile's
+# caption states the chosen definition so the reported number is unambiguous.
+GMV_DEFINITION: Final[str | None] = None
+
+# ════════════════════════════════════════════════════════════════════════════
 # §2  LOGGING
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -316,6 +341,21 @@ def _data_signature() -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
+# ────────────────────────────────────────────────────────────────────────────
+# Cache rationale
+# ────────────────────────────────────────────────────────────────────────────
+# Every cached function below returns *serialisable* results — DataFrames,
+# dicts, or lists. @st.cache_data is the correct decorator because it hands
+# each caller an independent copy. This matters here: filtered DataFrames are
+# mutated in place downstream (`.copy()` followed by column assignment in
+# build_model, chart helpers, etc.), and a shared mutable object across
+# sessions would leak state between users. @st.cache_resource is reserved for
+# objects that MUST be shared singletons — a sqlite3.Connection, a fitted
+# model, a threading.Lock — none of which a CSV-backed pandas pipeline holds.
+# If this app is ever migrated to a SQLite-backed backend, the connection
+# would move to @st.cache_resource while the query *results* stay on
+# @st.cache_data.
+# ────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Loading Olist data…")
 def load_data(data_signature: str = "") -> dict[str, pd.DataFrame]:
@@ -585,6 +625,73 @@ def query_headline_gap(year: str,
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# §4.x  GMV  (definition-gated — see §1.x)
+# ════════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
+def query_gmv(year: str, states_tuple: tuple[str, ...],
+              definition: str | None = GMV_DEFINITION) -> dict[str, Any] | None:
+    """Return order-grain GMV under the chosen definition, or ``None`` if unset.
+
+    Returns ``{"gmv", "merchandise", "freight", "definition", "orders"}`` when
+    ``definition`` is ``"A"`` or ``"B"``. ``"C"`` (payment_value) is rejected
+    because the payments CSV is not loaded by this app — refusing to emit a
+    figure is the honest behaviour, not a limitation to paper over.
+
+    Dedupe rationale: reviews are row-level (99,224 rows / 98,673 orders —
+    L3 fan-out), and multi-item orders have multiple order_items rows, so the
+    merge is followed by an order-grain groupby *before* summing. Only
+    delivered orders contribute (cancelled/unavailable orders would otherwise
+    inflate GMV with revenue that never landed).
+    """
+    if definition is None:
+        return None
+    if definition == "C":
+        _LOGGER.warning(
+            "GMV definition C (payment_value) requested but the payments "
+            "CSV is not in CONFIG.tables — refusing to fabricate a figure."
+        )
+        return None
+    if definition not in {"A", "B"}:
+        _LOGGER.warning("Unknown GMV definition %r; returning None.",
+                        definition)
+        return None
+
+    frames = load_data(_data_signature())
+    model = apply_filters(get_model(), year, list(states_tuple))
+    if model is None or model.empty:
+        return None
+
+    eligible = model.loc[model["is_delivered"], ["order_id"]].drop_duplicates()
+    if eligible.empty:
+        return None
+
+    items = frames["order_items"][["order_id", "price", "freight_value"]].copy()
+    items["price"] = pd.to_numeric(items["price"], errors="coerce")
+    items["freight_value"] = pd.to_numeric(
+        items["freight_value"], errors="coerce"
+    )
+    merged = items.merge(eligible, on="order_id", how="inner")
+    if merged.empty:
+        return None
+
+    order_vals = merged.groupby("order_id", as_index=False).agg(
+        price=("price", "sum"),
+        freight_value=("freight_value", "sum"),
+    )
+    merchandise = float(order_vals["price"].sum())
+    freight = float(order_vals["freight_value"].sum())
+    gmv = merchandise + (freight if definition == "B" else 0.0)
+    return {
+        "gmv": gmv,
+        "merchandise": merchandise,
+        "freight": freight,
+        "definition": definition,
+        "orders": int(order_vals["order_id"].nunique()),
+    }
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # §5  CHART HELPERS
 # ════════════════════════════════════════════════════════════════════════════
 
@@ -689,9 +796,19 @@ def _chart_card(fn: Callable[..., None], *args,
 # §6  OVERVIEW CHART  (Q2) — NOT FILTERABLE
 # ════════════════════════════════════════════════════════════════════════════
 
-def chart_review_distribution() -> None:
-    year: str = "All"
-    states: tuple[str, ...] = ()
+def chart_review_distribution(year: str = "All",
+                              states: tuple[str, ...] = ()) -> None:
+    """Whole-dataset review distribution.
+
+    The ``year`` and ``states`` parameters are accepted for signature
+    uniformity with every other chart function (so callers are explicit
+    about scope), but the body deliberately pins scope to ``"All"`` / ``()``:
+    this chart is the unfiltered baseline (Q2) and must never respond to the
+    sidebar. The caption and the locked scope make that explicit to users.
+    """
+    # Deliberately pinned: this chart is the unfiltered baseline (Q2).
+    year = "All"
+    states = ()
 
     st.markdown("### Review Score Distribution")
     st.caption(
@@ -2160,8 +2277,12 @@ def render_conclusion() -> None:
         delayed orders, regional logistics management and continuous
         monitoring of customer feedback — reducing negative experiences
         and strengthening customer confidence.</p>
-        <p><i>Association, not causation: these findings point to where to
-        act, and pilots should confirm the effect.</i></p>""",
+        <p><i>Named limitation (L3): the dataset carries 99,224 review
+        rows across only 98,673 orders — 551 rows (0.6%) of review
+        fan-out. Every average here is row-level; a per-order dedupe
+        shifts the mean by well under 0.01★, so the headline gap holds,
+        but any figure quoted alongside a row count should say which
+        grain it uses.</i></p>""",
         variant="ok", tags=["Conclusion", "Capstone"],
     )
 
@@ -3112,6 +3233,26 @@ def render_overview(year: str, states: tuple[str, ...],
     c4.metric("Late Deliveries", fmt_int(k["late_deliveries"]),
               delta=late_delta, delta_color="inverse")
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
+
+    # GMV is definition-gated (see §1.x). It renders only when a definition
+    # is set, and the caption states which one — so the figure is never
+    # reported under an ambiguous label.
+    gmv = query_gmv(year, states)
+    if gmv is not None:
+        label = ("GMV · merchandise excl. freight"
+                 if gmv["definition"] == "A"
+                 else "GMV · incl. freight")
+        st.metric(label, f"R$ {gmv['gmv']:,.0f}")
+        st.caption(
+            f"GMV definition **{gmv['definition']}** — {label.lower()}, "
+            f"order-grain deduped, delivered orders only "
+            f"({gmv['orders']:,} orders). Merchandise "
+            f"R$ {gmv['merchandise']:,.0f} · freight "
+            f"R$ {gmv['freight']:,.0f}. Definition {gmv['definition']} is "
+            f"chosen because it isolates the merchandise value from "
+            f"shipping cost; set `GMV_DEFINITION = \"B\"` to include "
+            f"freight instead."
+        )
 
     if filter_active:
         st.info(
