@@ -1378,11 +1378,21 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
     ax.legend(frameon=False, loc="upper right")
     ymax = float(max(grp["delivered"].max(), 1)) * 1.18
     ax.set_ylim(0, ymax)
+    
     for i, (_, r) in enumerate(grp.iterrows()):
+        # Late percentage (red text)
         ax.text(i + w / 2, r["late"] + ymax * 0.015,
                 f"{r['late_pct']:.1f}%",
                 ha="center", va="bottom", fontsize=9,
                 color=PALETTE.danger, fontweight="bold")
+        
+        # On-time total count (green text)
+        # We place it at the top of the green bar
+        ax.text(i - w / 2, r["on_time"] + ymax * 0.015,
+                f"{int(r['on_time']):,}",
+                ha="center", va="bottom", fontsize=9,
+                color=PALETTE.success, fontweight="bold")
+
     _finish(fig)
 
     overall_ratio = _safe_div(grp["late"].sum(), grp["delivered"].sum())
@@ -1935,11 +1945,15 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
     d2.metric("Late Avg Score",
               "—" if g["late"] is None else f"{g['late']:.2f}★",
               delta=f"n={g['n_late']:,}", delta_color="off")
+    
+    # Updated label to be clearer
     d3.metric("Star Gap (Driver)", f"{g['gap']:.2f}★",
-              delta=(f"{g['gap_pct']:.1f}% of on-time"
-                     if g["gap_pct"] is not None else None),
+              delta=(f"Drop from on-time baseline" if g["gap_pct"] is not None else None),
               delta_color="off")
+              
+    # Updated caption to explain the 40.2% clearly
     st.caption(
+        "The 1.73★ gap means late orders score **40.2% lower** than on-time orders. "
         "A gap above 1.00★ (≈25% of the on-time score) makes delivery "
         "punctuality the highest-ROI lever for satisfaction improvement."
     )
@@ -1977,11 +1991,29 @@ def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
               Delivery punctuality is the <b>#1 satisfaction lever</b>
             </div>
             <div class="exec-summary-detail">
-              Late orders lose <b style="color:{PALETTE.danger};">{gap_txt}{gap_pct_txt}</b>
-              on average versus on-time orders — a gap far larger than any
-              geographic difference. The current selection averages
-              <b>{avg_txt}</b> across <b>{k['total_orders']:,}</b> orders,
-              with {late_pct_txt}.
+              <p style="margin-bottom: 8px;">
+                <b>Current State:</b> The business maintains a generally positive sentiment, 
+                averaging <b>{avg_txt}</b> across <b>{k['total_orders']:,}</b> orders. 
+                However, <b>{late_pct_txt}</b> fail to meet their promised delivery date.
+              </p>
+              <p style="margin-bottom: 8px;">
+                <b>The Problem:</b> Late deliveries are severely damaging customer loyalty. 
+                On-time orders average a healthy score, but late orders lose 
+                <b style="color:{PALETTE.danger};">{gap_txt}{gap_pct_txt}</b> on average. 
+                This is a statistically robust gap that dwarfs any geographic or product-category differences.
+              </p>
+              <p style="margin-bottom: 8px;">
+                <b>Operational Impact:</b> The damage compounds over time. Orders delayed by just 
+                1–3 days see a sharp spike in 1–2★ reviews. If an order drifts past 20 days, 
+                the detractor rate skyrockets, meaning customers are highly likely to leave 
+                a negative review and potentially churn.
+              </p>
+              <p style="margin-bottom: 0;">
+                <b>Strategic Recommendation:</b> Shift the operational focus from <i>speed</i> to 
+                <i>reliability</i>. Implement early-warning interventions for orders approaching 
+                day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. 
+                Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
+              </p>
             </div>
           </div>
           <div class="exec-summary-badge"
