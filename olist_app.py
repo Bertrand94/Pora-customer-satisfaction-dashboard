@@ -9,7 +9,7 @@ Primary finding: delivery punctuality is the #1 satisfaction lever —
 late orders cost ~1.73★ (40% of the on-time score).
 
 TAB LAYOUT (in-page horizontal navigation, not sidebar)
-  1. Overview               KPIs + Review Score Distribution (NOT filterable)
+  1. Overview               KPIs + Review Score Distribution (filter-aware)
   2. Customer Satisfaction  Delivery-time buckets, state scores, on-time by
                             state, monthly trend, Brazil reviews map
   3. Detail & Method        Delivery Punctuality vs Satisfaction (+ what-if),
@@ -793,32 +793,27 @@ def _chart_card(fn: Callable[..., None], *args,
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §6  OVERVIEW CHART  (Q2) — NOT FILTERABLE
+# §6  OVERVIEW CHART  (Q2) — FILTER-AWARE
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_review_distribution(year: str = "All",
                               states: tuple[str, ...] = ()) -> None:
-    """Whole-dataset review distribution.
+    """Review score distribution for the current selection.
 
-    The ``year`` and ``states`` parameters are accepted for signature
-    uniformity with every other chart function (so callers are explicit
-    about scope), but the body deliberately pins scope to ``"All"`` / ``()``:
-    this chart is the unfiltered baseline (Q2) and must never respond to the
-    sidebar. The caption and the locked scope make that explicit to users.
+    Responds to the Year and State filters like every other chart. When both
+    are at their defaults ("All" / ()) the chart is the whole-dataset
+    baseline (Q2) and reconciles to the sidebar reference values.
     """
-    # Deliberately pinned: this chart is the unfiltered baseline (Q2).
-    year = "All"
-    states = ()
-
     st.markdown("### Review Score Distribution")
     st.caption(
-        "🔒 This chart is **not affected by the Year / State filters** — "
-        "it always shows the whole dataset as the baseline."
+        "Distribution of review scores for the **current Year / State "
+        "selection**. With both filters set to *All*, this is the "
+        "whole-dataset baseline (Q2)."
     )
     df = _reviews_with_order_scope(year, states)
     df = df[df["review_score"].notna()] if not df.empty else df
     if df is None or df.empty:
-        _no_data(); return
+        _no_data("No reviews for the current Year / State selection."); return
 
     counts = df["review_score"].round().astype(int).value_counts().sort_index()
     if counts.empty:
@@ -838,7 +833,7 @@ def chart_review_distribution(year: str = "All",
     fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
     bars = ax.bar(counts.index.astype(str), counts.values, color=shades,
                   edgecolor=PALETTE.white, linewidth=1.4)
-    ax.set_title("Review Score Distribution (whole dataset)", pad=14,
+    ax.set_title("Review Score Distribution (current selection)", pad=14,
                  loc="left")
     ax.set_xlabel("Review score (stars)")
     ax.set_ylabel("Number of reviews")
@@ -890,7 +885,7 @@ def chart_review_distribution(year: str = "All",
             f"1–2★ reviews rather than treating satisfaction as "
             f"broadly weak."
         ),
-        scope="All years · All states (unfiltered baseline)",
+        scope=scope_label(year, states),
     )
 
 
@@ -3104,9 +3099,9 @@ def render_nav_tabs() -> str:
 def render_sidebar() -> tuple[str, tuple[str, ...]]:
     st.sidebar.subheader("🎛️ Filters")
     st.sidebar.caption(
-        "Both filters apply to **every KPI and chart** except the "
-        "*Review Score Distribution*, which always shows the whole "
-        "dataset. Set both to *All* to reproduce the reference values."
+        "Both filters apply to **every KPI and chart**, including the "
+        "*Review Score Distribution*. Set both to *All* to reproduce the "
+        "reference values."
     )
 
     def _reset_filters() -> None:
@@ -3256,17 +3251,17 @@ def render_overview(year: str, states: tuple[str, ...],
 
     if filter_active:
         st.info(
-            f"Active filter — **{scope_label(year, states)}**. The KPIs "
-            "above respond to it; the Review Score Distribution below does "
-            "not. Set both filters to All to reproduce the sidebar "
-            "reference values."
+            f"Active filter — **{scope_label(year, states)}**. All KPIs and "
+            "charts on this tab, including the Review Score Distribution "
+            "below, respond to it. Set both filters to All to reproduce the "
+            "sidebar reference values."
         )
 
     render_headline_strip(year, states)
     render_kpi_insight(year, states)
 
-    # Not filterable by design. Decision status: FYI (baseline context).
-    _chart_card(chart_review_distribution, decision="fyi")
+    # Filter-aware baseline. Decision status: FYI (context, not an action).
+    _chart_card(chart_review_distribution, year, states, decision="fyi")
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -3721,9 +3716,8 @@ def main() -> None:
         f"(n={REF['q6_on_time_orders']:,}) vs late "
         f"{REF['late_score']:.2f} (n={REF['q6_late_orders']:,}). "
         "Every KPI, chart and insight line responds to the Year and State "
-        "filters (except the Review Score Distribution, which is always "
-        "whole-dataset) and reconciles to the verified SQL reference when "
-        "both are set to All."
+        "filters, and reconciles to the verified SQL reference when both "
+        "are set to All."
     )
 
 
