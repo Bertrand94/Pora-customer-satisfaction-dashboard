@@ -2,67 +2,257 @@
 
 **PORA Academy · Cohort 7 · Data Analysis · Group 1 Capstone**
 
-A decision-first Streamlit dashboard built on **99,441 Olist orders (2016–2018)** to identify what truly drives customer satisfaction.
+A decision-first Streamlit dashboard built on **99,441 Olist orders (2016–2018)**
+that identifies what *actually* drives customer satisfaction — and quantifies
+how much it's worth.
 
-> **Primary finding:** Delivery punctuality is the **#1 satisfaction lever**. Late deliveries cost an average of **1.73★** (a **40.2% drop** compared with on-time orders) — a gap that dwarfs any geographic or product-category difference.
+> **Primary finding.** Delivery punctuality is the **#1 satisfaction lever**.
+> Late deliveries cost an average of **1.73★** — a **40.2 % drop** versus
+> on-time orders. This gap dwarfs every geographic, product, or seasonal
+> difference in the dataset.
 
-🔗 **Live app:** [pora-customer-satisfaction-dashboard](https://pora-customer-satisfaction-dashboard-wu3ymdqefkytau38tt7mss.streamlit.app/)
+🔗 **Live app:** https://pora-customer-satisfaction-dashboard-wu3ymdqefkytau38tt7mss.streamlit.app/
 
 ---
 
-## 📖 Project Overview
+## 📖 Why this dashboard exists
 
-While e-commerce businesses often obsess over raw speed, this analysis proves that **reliability** — meeting the promised delivery date — is what actually drives customer loyalty. The dashboard guides stakeholders from high-level KPIs down to statistically verified root causes, ending with prioritized, high-ROI recommendations.
+E-commerce teams tend to optimise for *raw speed*. This analysis shows the
+thing that actually drives loyalty is **reliability** — hitting the promised
+delivery date. The dashboard walks a stakeholder from headline KPIs, down
+through statistically verified root causes, to a **prioritised, ROI-ranked
+action list**. Every number on screen reconciles to a verified SQL reference
+(see [`docs/reconciliation.md`](#) or the *Detail & Method* tab).
 
-### ✨ Key Features
+---
 
-- **Decision-first navigation:** In-page horizontal tabs (Overview → Customer Satisfaction → Detail & Method → Recommendations) that tell a coherent story.
-- **Interactive global filters:** Year and State selectors that dynamically update **every KPI and chart** on the dashboard.
-- **Dose–response analysis:** Visualises how satisfaction collapses as delays grow (On Time → Slightly Late → Moderately Late → Severely Late).
-- **Statistical rigor:** Welch's t-test, Cohen's *d*, and 95% confidence intervals prove the robustness of the delivery gap.
-- **What-if simulator:** An interactive slider projecting the expected average review score if a percentage of late orders were converted to on-time.
-- **Geographic insights:** A custom-rendered map of Brazil highlighting review concentration and lagging states (e.g., Rio de Janeiro, Bahia).
+## 🎯 What you can do in the app
+
+| Tab | What it answers | What you take away |
+|---|---|---|
+| **📈 Overview** | How big is the business, how happy are customers? | Baseline KPIs + review-score distribution |
+| **⭐ Customer Satisfaction** | *Where* is dissatisfaction concentrated? | Delivery-time buckets, state comparisons, monthly trend, Brazil map |
+| **🔬 Detail & Method** | *How strong* is the evidence? | Welch's t-test, Cohen's *d*, 95 % CI, sensitivity table, and 5 named limitations |
+| **💡 Recommendations** | *What should we do first?* | Impact × Effort priority matrix + 5 actionable recommendations with owners & KPIs |
+
+Key interactive features:
+
+- **Global filters** — Year and State selectors that update **every KPI and chart** on the dashboard.
+- **Dose–response analysis** — Satisfaction collapses as delays grow (On-Time → Slightly Late → Moderately Late → Severely Late).
+- **Statistical rigor** — Welch's *t*-test, Cohen's *d*, and 95 % CIs on every delivery-gap claim.
+- **What-if simulator** — Project the average score if X % of late orders convert to on-time.
+- **Geographic insights** — Custom-rendered Brazil map highlighting review concentration and lagging states (e.g., Rio de Janeiro, Bahia).
+
+---
+
+## 🚀 Quick start
+
+### Run locally
+
+```bash
+# 1. Clone
+git clone https://github.com/<your-org>/<your-repo>.git
+cd <your-repo>
+
+# 2. Install
+python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+
+# 3. Get the data
+#    Download the four Olist CSVs from Kaggle:
+#    https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce
+#    and place them in ./data/ (see tree below).
+
+# 4. Run
+streamlit run olist_app.py
+```
+
+The app opens at <http://localhost:8501>.
+
+### Deploy to Streamlit Community Cloud
+
+1. Push the repo (with `data/` inside) to GitHub.
+2. In Streamlit Cloud → **New app** → pick the repo, branch, and `olist_app.py`.
+3. *If the CSVs are not in the repo* (they are ~130 MB), mount them via
+   **Settings → Secrets**:
+
+   ```toml
+   OLIST_DATA_DIR = "/mount/data/olist"
+   ```
+
+   and add one line near the top of `olist_app.py`:
+
+   ```python
+   import streamlit as st
+   if "OLIST_DATA_DIR" in st.secrets:
+       os.environ["OLIST_DATA_DIR"] = st.secrets["OLIST_DATA_DIR"]
+   ```
+
+4. Deploy. Cold start is ~30 s; warm start ~1 s.
+
+### `requirements.txt`
+
+```text
+streamlit>=1.42,<2
+pandas>=2.0,<3
+matplotlib>=3.7,<4
+requests>=2.28
+plotly>=5.18
+numpy>=1.24
+scipy>=1.10
+```
 
 ---
 
 ## 📊 What responds to the filters
 
-The sidebar **Reporting Year** and **State** selectors apply to **every KPI and chart** on the dashboard. Set both filters to **All** to reproduce the reference numbers.
+The sidebar **Reporting Year** and **State** selectors apply to **every KPI
+and chart** on the dashboard. Set both filters to **All** to reproduce the
+reference numbers in the sidebar.
 
 | Element | Filtered? |
 |---|---|
-| Executive summary + headline strip | ✅ Yes |
+| Hero strip + headline finding banner | ✅ Yes |
 | KPI row (orders, delivered, avg review, late, avg delivery days) | ✅ Yes |
-| **Review score distribution** | ✅ **Yes** |
+| Review score distribution | ✅ Yes |
 | Monthly average review score | ✅ Yes |
 | Average review score by state (top 10) | ✅ Yes |
 | On-time vs late by state (top 5) | ✅ Yes |
 | Delivery punctuality vs satisfaction (+ what-if) | ✅ Yes |
 | Satisfaction by delivery-time bucket (reference line = selection average) | ✅ Yes |
 | Brazil map (selected states coloured, others greyed; year filtered) | ✅ Yes |
-| "Insight" line under every chart | ✅ Yes — recomputed from the selection |
+| Insight line under every chart | ✅ Yes — recomputed from the selection |
 | Detail & Method diagnostic tables | ❌ No — whole-dataset data-quality checks |
-| Recommendations tab | ❌ No — decisions are based on the whole dataset |
+| Recommendations tab | ❌ No — decisions use the whole dataset |
 
-All filtered queries share one definition (`apply_filters()` in `olist_app.py`), so every chart filters identically.
+All filtered queries share one function (`apply_filters()` in `olist_app.py`),
+so every chart filters identically — no drift between tabs.
 
 ---
 
-## 📂 Repository Structure
+## 🎨 Design system
+
+The dashboard uses a purpose-built design system tuned for decision-making:
+
+| Token | Value | Role |
+|---|---|---|
+| Brand | `#0EA5E9` (Sky 500) | Interactive — tabs, sliders, focus rings |
+| Accent | `#0F766E` (Teal 700) | Brand accent on hero gradient |
+| Success | `#059669` (Emerald 600) | "On-time", positive delta |
+| Warning | `#D97706` (Amber 600) | "Slightly late", caution |
+| Danger | `#DC2626` (Red 600) | "Severely late", negative delta |
+| Neutrals | Tailwind **Slate** (50 → 900) | Backgrounds, text, dividers |
+
+**Typography** — Inter with a fluid `clamp()` scale (body `0.94–1.0 rem`,
+KPI values `1.4–1.85 rem`, hero `2.0–2.75 rem`), so the dashboard reads
+cleanly on laptops, projectors, and 4K displays alike.
+
+**Spacing** — 8-pt grid; card padding `24 px`, card gap `16 px`,
+section gap `32 px`.
+
+**Accessibility** — all body text meets WCAG AA on white; `:focus-visible`
+outlines on every interactive element; `prefers-reduced-motion` respected.
+
+---
+
+## ⚠️ Limitations (read before quoting)
+
+The *Detail & Method* tab contains the full list (L1–L5). The two that matter
+most for interpreting the headline finding:
+
+- **L1 — Association, not causation.** The 1.73★ on-time↔late gap is a
+  *strong association*, not proof that lateness alone causes lower ratings.
+  Product quality, seller performance, distance, and communication failures
+  all contribute. A controlled pilot is needed before claiming a precise lift.
+- **L2 — Incomplete coverage & data grain.** 2016 has only Sept/Oct/Dec
+  (no November); 2018 ends **17 October** — **2017 is the only complete
+  calendar year**. And the review table has **99,224 rows across 98,673
+  orders** (551 fan-out rows); every average here is row-level. Per-order
+  dedupe shifts means by < 0.01★, so the headline gap holds, but any figure
+  quoted alongside a row count must state which grain it uses.
+
+The remaining limitations (L3–L5) cover *delivered ≠ delivered-with-a-date*
+semantics, dataset scope & external validity, and small-selection noise.
+
+---
+
+## 📂 Repository structure
 
 ```text
-├── .streamlit/                              # Streamlit config
-├── data/                                    # Raw Olist CSV datasets
+.
+├── .streamlit/
+│   └── config.toml                    # Streamlit theme + server config
+├── data/                              # Raw Olist CSVs (not committed if >100 MB)
 │   ├── olist_customers_dataset.csv
 │   ├── olist_order_items_dataset.csv
 │   ├── olist_order_reviews_dataset.csv
-│   └── olist_orders_dataset.csv
-├── Customer satisfaction report.pdf         # Detailed written report
-├── Customer-Satisfaction-Presentation.pptx  # Stakeholder slide deck
-├── Data_cleaning.ipynb                      # Data preparation notebook
-├── FINAL LIST OF CUSTOMER SATISFACTION TEAM.docx  # Team roster
-├── olist_app.py                             # Main Streamlit application
-├── olist_dashboard.db                       # SQLite database
-├── pora_logo.png                            # Branding asset
-├── requirements.txt                         # Python dependencies
-└── README.md                                # This file
+│   ├── olist_orders_dataset.csv
+│   └── brazil-states.geojson          # optional — map falls back to remote mirror
+├── docs/
+│   ├── Customer satisfaction report.pdf
+│   └── Customer-Satisfaction-Presentation.pptx
+├── notebooks/
+│   └── Data_cleaning.ipynb            # Data preparation & exploratory work
+├── olist_app.py                       # Main Streamlit application
+├── pora_logo.png                      # Branding asset (falls back to inline SVG)
+├── requirements.txt
+├── README.md
+└── LICENSE                            # MIT
+```
+
+> **`olist_dashboard.db`** — *if the SQLite file is present, document its
+> purpose here* (e.g., "pre-joined analytical view consumed by the app").
+> If the app reads CSVs directly, remove the file from the repo.
+
+---
+
+## 🧪 Quality checks (verified before Cloud deploy)
+
+- ✅ No `hash()` in Streamlit widget keys (deterministic keys only)
+- ✅ No `st.session_state` writes to widget-owned keys
+- ✅ Every cached function includes the file-signature in its key
+- ✅ Matplotlib `Agg` backend + `runner.fixMatplotlib = true`
+- ✅ All figures closed after render (no matplotlib memory leak)
+- ✅ `pd.cut(..., right=False)` — FutureWarning-free on pandas 2.x
+- ✅ Empty-state styling has no double border
+- ✅ `prefers-reduced-motion`, `:focus-visible`, mobile breakpoints at 1100 px & 768 px
+- ✅ Webfont fallback (`Inter` → system sans) so first paint is never blank
+- ✅ Graceful degradation when GeoJSON fetch fails
+
+---
+
+## 📚 Data
+
+The dataset is the public **Brazilian E-Commerce Public Dataset by Olist**
+on Kaggle:
+<https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce>.
+
+Four of the nine CSVs are used:
+
+| Table | Rows | Used for |
+|---|---|---|
+| `olist_orders_dataset.csv` | 99,441 | Order timeline, delivery dates, status |
+| `olist_customers_dataset.csv` | 99,441 | Customer geography, unique IDs |
+| `olist_order_reviews_dataset.csv` | 99,224 | Review scores |
+| `olist_order_items_dataset.csv` | 112,650 | Item prices, freight (GMV) |
+
+The remaining five tables (payments, sellers, products, category translation,
+geolocation) are intentionally excluded — see limitation **L4**.
+
+---
+
+## 🧑‍🤝‍🧑 Team
+
+| Name | Role |
+|---|---|
+| <!-- 1. Elizabeth Falola 2. Adewumi Olamide Grace 3. Obi Oluchi Promise 4. Atarase Michael K. --> | <!-- Data cleaning, EDA --> |
+| <!-- 1. Nwauzor Uchechukwu Bertrand 2. Fred  Peace Buloebiere 3. Moteleola Daniel Olamilekan 4. Olubakin Ifeoluwa Adesewa --> | <!-- Statistical analysis, dashboard --> |
+| <!-- 1. Kpagyu Faith Asheahe 2. Olanrewaju Anuoluwapo Adeola 3. Omotosho Esther Toluwalope  4. Chika Damian Muoneke --> | <!-- Recommendations, report --> |
+
+*Full roster in `docs/FINAL LIST OF CUSTOMER SATISFACTION TEAM.docx`.*
+
+---
+
+## 📜 License
+
+MIT — see [LICENSE](./LICENSE). Dataset attribution: **Olist / Kaggle**.
