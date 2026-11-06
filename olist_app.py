@@ -71,6 +71,9 @@ PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
 # L5 guard: suppress population-level claims on small selections.
 MIN_RELIABLE_REVIEWS: Final[int] = 200
 
+# Widget key — never use hash() (non-deterministic across processes).
+_WHATIF_KEY_BASE: Final[str] = "whatif_pct"
+
 REF: Final[dict[str, Any]] = {
     "total_orders":      99_441,
     "delivered_orders":  96_478,
@@ -89,38 +92,37 @@ REF: Final[dict[str, Any]] = {
 
 @dataclass(frozen=True)
 class Palette:
-    # ── Brand: teal-indigo "trust" palette ───────────────────────────────
-    # Interactive affordances only (tabs, buttons, links). Not used for
-    # data fills — those use the semantic tokens below.
-    primary:       str = "#4F46E5"   # Indigo 600  (interactive)
-    primary_light: str = "#A5B4FC"   # Indigo 300  (focus ring / borders)
-    primary_dark:  str = "#3730A3"   # Indigo 800  (hover)
-    accent:        str = "#0F766E"   # Teal 700    (brand accent, AA on white)
-    accent_light:  str = "#5EEAD4"   # Teal 300
-    accent_dark:   str = "#115E59"   # Teal 800
+    """Decision-first semantic palette (WCAG AA on white)."""
+    # Brand interactive
+    primary:       str = "#0EA5E9"   # Sky 500  — interactive
+    primary_light: str = "#7DD3FC"   # Sky 300  — focus rings
+    primary_dark:  str = "#0369A1"   # Sky 700  — hover
+    accent:        str = "#0F766E"   # Teal 700 — brand accent (AA on white)
+    accent_light:  str = "#5EEAD4"
+    accent_dark:   str = "#115E59"
 
-    # ── Sentiment semantic (NPS-aligned, WCAG AA on white) ───────────────
-    success:       str = "#047857"   # Emerald 700 — AA body text
-    success_light: str = "#6EE7B7"   # Emerald 300 — fills only
-    success_dark:  str = "#064E3B"   # Emerald 900
-    warn:          str = "#B45309"   # Amber 700  — AA body text
-    warn_light:    str = "#FCD34D"   # Amber 300  — fills only
-    warn_dark:     str = "#78350F"   # Amber 900
-    danger:        str = "#BE123C"   # Rose 700   — AA body text
-    danger_light:  str = "#FDA4AF"   # Rose 300   — fills only
-    danger_dark:   str = "#881337"   # Rose 900
+    # Semantic sentiment
+    success:       str = "#059669"   # Emerald 600
+    success_light: str = "#6EE7B7"   # Emerald 300 (fills)
+    success_dark:  str = "#064E3B"
+    warn:          str = "#D97706"   # Amber 600
+    warn_light:    str = "#FCD34D"   # Amber 300
+    warn_dark:     str = "#78350F"
+    danger:        str = "#DC2626"   # Red 600
+    danger_light:  str = "#FCA5A5"   # Red 300
+    danger_dark:   str = "#7F1D1D"
 
-    # ── Neutrals: stone (warmer) instead of slate ────────────────────────
-    ink:           str = "#1C1917"   # Stone 900
-    ink_soft:      str = "#292524"   # Stone 800
-    slate_700:     str = "#44403C"   # Stone 700
-    slate_600:     str = "#57534E"   # Stone 600
-    slate_500:     str = "#78716C"   # Stone 500
-    slate_400:     str = "#A8A29E"   # Stone 400
-    slate_300:     str = "#D6D3D1"   # Stone 300
-    slate_200:     str = "#E7E5E4"   # Stone 200
-    slate_100:     str = "#F5F5F4"   # Stone 100
-    slate_50:      str = "#FAFAF9"   # Stone 50
+    # Neutrals — Tailwind slate (cooler, cleaner for analytics than stone)
+    ink:           str = "#0F172A"   # Slate 900
+    ink_soft:      str = "#1E293B"   # Slate 800
+    slate_700:     str = "#334155"   # Slate 700
+    slate_600:     str = "#475569"   # Slate 600
+    slate_500:     str = "#64748B"   # Slate 500
+    slate_400:     str = "#94A3B8"   # Slate 400
+    slate_300:     str = "#CBD5E1"   # Slate 300
+    slate_200:     str = "#E2E8F0"   # Slate 200
+    slate_100:     str = "#F1F5F9"   # Slate 100
+    slate_50:      str = "#F8FAFC"   # Slate 50
     white:         str = "#FFFFFF"
 
 
@@ -159,7 +161,6 @@ class Config:
         "vector-json/master/brazil-states.geojson",
     )
     geojson_timeout_seconds: Final[int] = 20
-    # Signature-based keys invalidate on file change; no TTL needed.
     data_cache_ttl_seconds:    Final[int | None] = None
     geojson_cache_ttl_seconds: Final[int | None] = None
     min_reviews_per_month:     Final[int] = 30
@@ -171,26 +172,6 @@ PALETTE = Palette()
 # ════════════════════════════════════════════════════════════════════════════
 # §1.x  GMV DEFINITION SWITCH
 # ════════════════════════════════════════════════════════════════════════════
-#
-# GMV is intentionally NOT surfaced as a KPI until its definition is fixed.
-# Candidate definitions and their trade-offs:
-#   A) sum(order_items.price) for delivered, non-cancelled orders,
-#      order-grain deduped          → closest to "merchandise GMV"; excludes
-#                                     freight (the conventional Olist reading).
-#   B) A + sum(order_items.freight_value)
-#                                   → "gross order value incl. shipping".
-#   C) sum(payments.payment_value)  → "cash collected"; needs the payments
-#                                     CSV, which is NOT in CONFIG.tables.
-#
-# The model here has no payment table, and reviews are row-level (L3 fan-out:
-# 99,224 rows across 98,673 orders). Any GMV must therefore dedupe to order
-# grain before summing, and definition C cannot be computed honestly with the
-# four CSVs this app loads. Until a definition is chosen, query_gmv returns
-# None and no GMV tile is rendered — the app will not fabricate a figure
-# under an ambiguous label.
-#
-# Set GMV_DEFINITION to "A" or "B" to enable the Overview tile. The tile's
-# caption states the chosen definition so the reported number is unambiguous.
 GMV_DEFINITION: Final[str | None] = None
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -296,19 +277,20 @@ def _st_plotly(fig: Any) -> None:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# §2.z  LOGO HELPER
+# §2.z  LOGO HELPER (cached so we don't re-read disk on every rerun)
 # ════════════════════════════════════════════════════════════════════════════
 
 _FALLBACK_LOGO_SVG: Final[str] = (
     "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcv"
     "MjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tl"
-    "PSIjNEY0NkU1IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3Vu"
+    "PSIjMEVBNUU5IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3Vu"
     "ZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+PGNpcmNsZSBjeD0iMTIiIGN5PSIx"
     "MiIgcj0iMTAiPjwvY2lyY2xlPjxwYXRoIGQ9Ik0xMiA4djgiPjwvcGF0aD48cGF0"
     "aCBkPSJNOCAxMmg4Ij48L3BhdGg+PC9zdmc+"
 )
 
 
+@st.cache_data(ttl=None, show_spinner=False)
 def _get_logo_base64() -> str:
     local_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "pora_logo.png"
@@ -329,7 +311,6 @@ def _get_logo_base64() -> str:
 # ════════════════════════════════════════════════════════════════════════════
 
 def _data_dir() -> str:
-    """Return the configured directory containing the four Olist CSV files."""
     return os.environ.get(
         "OLIST_DATA_DIR",
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "data"),
@@ -337,7 +318,6 @@ def _data_dir() -> str:
 
 
 def _data_signature() -> str:
-    """Fingerprint file metadata so edits invalidate Streamlit's data cache."""
     parts: list[str] = []
     directory = _data_dir()
     for table, filename in sorted(CONFIG.tables.items()):
@@ -350,21 +330,6 @@ def _data_signature() -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
-# ────────────────────────────────────────────────────────────────────────────
-# Cache rationale
-# ────────────────────────────────────────────────────────────────────────────
-# Every cached function below returns *serialisable* results — DataFrames,
-# dicts, or lists. @st.cache_data is the correct decorator because it hands
-# each caller an independent copy. This matters here: filtered DataFrames are
-# mutated in place downstream (`.copy()` followed by column assignment in
-# build_model, chart helpers, etc.), and a shared mutable object across
-# sessions would leak state between users. @st.cache_resource is reserved for
-# objects that MUST be shared singletons — a sqlite3.Connection, a fitted
-# model, a threading.Lock — none of which a CSV-backed pandas pipeline holds.
-# If this app is ever migrated to a SQLite-backed backend, the connection
-# would move to @st.cache_resource while the query *results* stay on
-# @st.cache_data.
-# ────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds,
                show_spinner="Loading Olist data…")
 def load_data(data_signature: str = "") -> dict[str, pd.DataFrame]:
@@ -504,9 +469,11 @@ def is_partial_year(year: str | None) -> bool:
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def _reviews_with_order_scope(
-    year: str, states_tuple: tuple[str, ...], *, delivered_only: bool = False
+    year: str, states_tuple: tuple[str, ...], *, delivered_only: bool = False,
+    data_signature: str = "",
 ) -> pd.DataFrame:
-    frames = load_data(_data_signature())
+    # data_signature is part of the cache key so CSV edits invalidate.
+    frames = load_data(data_signature)
     model = apply_filters(get_model(), year, list(states_tuple))
     if model is None or model.empty:
         return pd.DataFrame(
@@ -534,7 +501,8 @@ def _reviews_with_order_scope(
 # ════════════════════════════════════════════════════════════════════════════
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
-def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
+def query_kpis(year: str, states_tuple: tuple[str, ...],
+               data_signature: str = "") -> dict[str, Any]:
     empty: dict[str, Any] = {
         "total_orders": 0, "delivered_orders": 0, "delivered_pct": None,
         "avg_review_score": None, "late_deliveries": 0, "late_pct": None,
@@ -551,7 +519,10 @@ def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
         delivered_status["order_delivered_customer_date"].notna()
     ]
 
-    reviews = _reviews_with_order_scope(year, states_tuple, delivered_only=False)
+    reviews = _reviews_with_order_scope(
+        year, states_tuple, delivered_only=False,
+        data_signature=data_signature,
+    )
     avg_review = _safe_mean(reviews["review_score"]) if not reviews.empty else None
     avg_days = (
         _safe_mean(delivered_with_date["delivery_days"])
@@ -586,14 +557,17 @@ def query_kpis(year: str, states_tuple: tuple[str, ...]) -> dict[str, Any]:
 
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
-def query_headline_gap(year: str,
-                       states_tuple: tuple[str, ...]) -> dict[str, Any]:
+def query_headline_gap(year: str, states_tuple: tuple[str, ...],
+                       data_signature: str = "") -> dict[str, Any]:
     empty: dict[str, Any] = {
         "on_time": None, "late": None, "gap": None,
         "gap_pct": None, "n_on": 0, "n_late": 0,
     }
 
-    reviews = _reviews_with_order_scope(year, states_tuple, delivered_only=True)
+    reviews = _reviews_with_order_scope(
+        year, states_tuple, delivered_only=True,
+        data_signature=data_signature,
+    )
     if reviews is None or reviews.empty:
         return empty
 
@@ -639,14 +613,8 @@ def query_headline_gap(year: str,
 
 @st.cache_data(ttl=CONFIG.data_cache_ttl_seconds, show_spinner=False)
 def query_gmv(year: str, states_tuple: tuple[str, ...],
-              definition: str | None) -> dict[str, Any] | None:
-    """Return order-grain GMV under the chosen definition, or ``None`` if unset.
-
-    ``definition`` is passed explicitly at every call site (not read from the
-    module-level default) so the cache key always reflects the value actually
-    requested — Python evaluates default arguments once at definition time,
-    which would otherwise serve a stale result if ``GMV_DEFINITION`` changed.
-    """
+              definition: str | None, data_signature: str = ""
+              ) -> dict[str, Any] | None:
     if definition is None:
         return None
     if definition == "C":
@@ -660,7 +628,7 @@ def query_gmv(year: str, states_tuple: tuple[str, ...],
                         definition)
         return None
 
-    frames = load_data(_data_signature())
+    frames = load_data(data_signature)
     model = apply_filters(get_model(), year, list(states_tuple))
     if model is None or model.empty:
         return None
@@ -844,19 +812,14 @@ def render_tab_takeaway(tab: str) -> None:
 
 def chart_review_distribution(year: str = "All",
                               states: tuple[str, ...] = ()) -> None:
-    """Review score distribution for the current selection.
-
-    Responds to the Year and State filters like every other chart. When both
-    are at their defaults ("All" / ()) the chart is the whole-dataset
-    baseline (Q2) and reconciles to the sidebar reference values.
-    """
     st.markdown("### Review Score Distribution")
     st.caption(
         "Distribution of review scores for the **current Year / State "
         "selection**. With both filters set to *All*, this is the "
         "whole-dataset baseline (Q2)."
     )
-    df = _reviews_with_order_scope(year, states)
+    df = _reviews_with_order_scope(year, states,
+                                   data_signature=_data_signature())
     df = df[df["review_score"].notna()] if not df.empty else df
     if df is None or df.empty:
         _no_data("No reviews for the current Year / State selection."); return
@@ -869,7 +832,6 @@ def chart_review_distribution(year: str = "All",
         _no_data(); return
     pct = 100.0 * counts / total
 
-    # L5 guard: suppress population-level claims on small selections.
     reliable = total >= MIN_RELIABLE_REVIEWS
 
     shades = [
@@ -980,7 +942,7 @@ def chart_punctuality_vs_satisfaction(year: str,
         "order-grain means for the dose–response drill-down."
     )
 
-    q6 = query_headline_gap(year, states)
+    q6 = query_headline_gap(year, states, data_signature=_data_signature())
     if q6["gap"] is None:
         _no_data("No delivered orders with both a delivery date and a review.")
         return
@@ -1112,10 +1074,12 @@ def chart_punctuality_vs_satisfaction(year: str,
 
     st.markdown("#### 🎛️ What-if: convert late orders to on-time")
     if n_late >= PUNCT_MIN_N_STATUS and n_on >= PUNCT_MIN_N_STATUS:
+        # Deterministic widget key — hash(states) is randomised per process.
+        whatif_key = f"{_WHATIF_KEY_BASE}_{year}_{'-'.join(states) or 'all'}"
         pct = st.slider(
             "Percentage of late orders made on-time",
             min_value=0, max_value=100, value=10, step=5,
-            key=f"whatif_{year}_{hash(states) & 0xFFFF:x}",
+            key=whatif_key,
             help="Projects the effect on the selection average. "
                  "Assumes converted orders land at the on-time mean.",
         )
@@ -1208,7 +1172,10 @@ def chart_satisfaction_by_delivery_bucket(year: str,
                                           states: tuple[str, ...]) -> None:
     st.markdown("### Satisfaction by Delivery-Time Bucket")
 
-    df = _reviews_with_order_scope(year, states, delivered_only=True)
+    df = _reviews_with_order_scope(
+        year, states, delivered_only=True,
+        data_signature=_data_signature(),
+    )
     if df is None or df.empty:
         _no_data(); return
 
@@ -1228,8 +1195,10 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     labels = ["0-5 days", "6-10 days", "11-20 days", "21-30 days", "30+ days"]
     df = df.copy()
     try:
+        # right=False avoids pandas FutureWarning about bin inclusivity.
         df["bucket"] = pd.cut(df["delivery_days"], bins=bins,
-                              labels=labels, include_lowest=True)
+                              labels=labels, include_lowest=True,
+                              right=False)
     except Exception:
         _no_data(); return
     df = df[df["bucket"].notna()]
@@ -1317,7 +1286,8 @@ def chart_satisfaction_by_delivery_bucket(year: str,
 # ════════════════════════════════════════════════════════════════════════════
 
 def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
-    df = _reviews_with_order_scope(year, states)
+    df = _reviews_with_order_scope(year, states,
+                                   data_signature=_data_signature())
     if df is not None and not df.empty:
         df = df[df["review_score"].notna() & df["customer_state"].notna()]
     if df is None or df.empty:
@@ -1386,7 +1356,7 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
     else:
         low, high = plot_df.iloc[0], plot_df.iloc[-1]
         spread = high["avg_score"] - low["avg_score"]
-        g = query_headline_gap(year, states)
+        g = query_headline_gap(year, states, data_signature=_data_signature())
         cmp_txt = ""
         if g["gap"] is not None and g["gap"] > 0:
             cmp_txt = (
@@ -1484,7 +1454,8 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
 
 def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     st.markdown("### Monthly Average Review Score")
-    df = _reviews_with_order_scope(year, states)
+    df = _reviews_with_order_scope(year, states,
+                                   data_signature=_data_signature())
     if df is not None and not df.empty:
         df = df[df["review_score"].notna() & df["month"].notna()]
     if df is None or df.empty:
@@ -1548,7 +1519,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     _finish(fig)
 
     swing = grp.loc[high_i, "avg_score"] - grp.loc[low_i, "avg_score"]
-    g = query_headline_gap(year, states)
+    g = query_headline_gap(year, states, data_signature=_data_signature())
     cmp_txt = ""
     if g["gap"] is not None and g["gap"] > 0:
         rel = "smaller" if swing < g["gap"] else "larger"
@@ -1575,9 +1546,6 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
 
 @st.cache_data(ttl=CONFIG.geojson_cache_ttl_seconds, show_spinner=False)
 def load_brazil_geojson() -> dict[str, Any] | None:
-    """Prefer a vendored local file so the map renders without internet.
-    Falls back to remote mirrors only if the local file is missing or invalid.
-    """
     local_path = os.path.join(
         os.path.dirname(os.path.abspath(__file__)),
         "data", "brazil-states.geojson",
@@ -1666,7 +1634,7 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
         "Number of reviews per state and its share of all reviews in the "
         "selected year. If states are selected, only those are coloured."
     )
-    df = _reviews_with_order_scope(year, ())
+    df = _reviews_with_order_scope(year, (), data_signature=_data_signature())
     if df is not None and not df.empty:
         df = df[df["review_score"].notna() & df["customer_state"].notna()]
     if df is None or df.empty:
@@ -1840,7 +1808,7 @@ def info_card(title: str, body: str, *, variant: str = "info",
 
 
 def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
-    g = query_headline_gap(year, states)
+    g = query_headline_gap(year, states, data_signature=_data_signature())
     if g["gap"] is None:
         body = ("<span>Only one delivery status in this selection — "
                 "no gap to compute.</span>")
@@ -1863,7 +1831,7 @@ def render_headline_sidebar(year: str, states: tuple[str, ...]) -> None:
 
 
 def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
-    g = query_headline_gap(year, states)
+    g = query_headline_gap(year, states, data_signature=_data_signature())
     if g["gap"] is None:
         return
     gap_pct_txt = (f"<b>{g['gap_pct']:.1f}%</b>"
@@ -1888,7 +1856,7 @@ def render_headline_strip(year: str, states: tuple[str, ...]) -> None:
 
 def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
     st.markdown("### 🎯 Decision Snapshot")
-    g = query_headline_gap(year, states)
+    g = query_headline_gap(year, states, data_signature=_data_signature())
     if g["gap"] is None:
         st.caption("Widen filters to compute the on-time vs late gap.")
         return
@@ -1937,7 +1905,7 @@ def render_action_bar() -> None:
 
 
 def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
-    k = query_kpis(year, states)
+    k = query_kpis(year, states, data_signature=_data_signature())
     if not k.get("total_orders"):
         return
     text = (
@@ -1953,7 +1921,7 @@ def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
 
 
 def render_decision_insight(year: str, states: tuple[str, ...]) -> None:
-    g = query_headline_gap(year, states)
+    g = query_headline_gap(year, states, data_signature=_data_signature())
     if g["gap"] is None:
         return
     pct_txt = (f" (<b>{g['gap_pct']:.1f}%</b>)"
@@ -2103,22 +2071,24 @@ def render_priority_matrix() -> None:
         _st_plotly(fig)
     except Exception:
         fig, ax = plt.subplots(figsize=CHART_FIGSIZE_WIDE)
-        for _, r in items.iterrows():
-            c = (PALETTE.danger if r["impact"] >= 5
-                 else PALETTE.warn if r["impact"] >= 4
-                 else PALETTE.accent)
-            ax.scatter(r["effort"], r["impact"], s=300, color=c,
-                       edgecolor="white", linewidth=2, zorder=3)
-            ax.text(r["effort"], r["impact"] + 0.18, r["id"],
-                    ha="center", fontsize=11, fontweight="bold",
-                    color=PALETTE.ink)
-        ax.axhline(3.5, color=PALETTE.slate_300, linestyle="--", lw=1)
-        ax.axvline(2.5, color=PALETTE.slate_300, linestyle="--", lw=1)
-        ax.set_xlim(0.5, 5.5); ax.set_ylim(0.5, 5.5)
-        ax.set_xlabel("Effort →"); ax.set_ylabel("Impact →")
-        ax.set_title("Priority Matrix — Impact × Effort", loc="left")
-        _style_axes(ax)
-        _finish(fig)
+        try:
+            for _, r in items.iterrows():
+                c = (PALETTE.danger if r["impact"] >= 5
+                     else PALETTE.warn if r["impact"] >= 4
+                     else PALETTE.accent)
+                ax.scatter(r["effort"], r["impact"], s=300, color=c,
+                           edgecolor="white", linewidth=2, zorder=3)
+                ax.text(r["effort"], r["impact"] + 0.18, r["id"],
+                        ha="center", fontsize=11, fontweight="bold",
+                        color=PALETTE.ink)
+            ax.axhline(3.5, color=PALETTE.slate_300, linestyle="--", lw=1)
+            ax.axvline(2.5, color=PALETTE.slate_300, linestyle="--", lw=1)
+            ax.set_xlim(0.5, 5.5); ax.set_ylim(0.5, 5.5)
+            ax.set_xlabel("Effort →"); ax.set_ylabel("Impact →")
+            ax.set_title("Priority Matrix — Impact × Effort", loc="left")
+            _style_axes(ax)
+        finally:
+            _finish(fig)
     st.caption(
         "Top-left = **do first** (high impact, low effort). "
         "R2 and R5 are quick wins; R1 is the highest-ceiling project."
@@ -2143,44 +2113,44 @@ def render_priority_matrix() -> None:
 GLOBAL_CSS: Final[str] = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet">
 
 <style>
   :root {
-    /* WCAG-AA palette (mirrors Palette dataclass) */
-    --brand:        #4F46E5;
-    --brand-light:  #A5B4FC;
-    --brand-dark:   #3730A3;
-    --accent:       #0F766E;
+    /* ── Modern decision-first palette ─────────────────────────── */
+    --brand:        #0EA5E9;   /* Sky 500  — interactive */
+    --brand-light:  #7DD3FC;
+    --brand-dark:   #0369A1;
+    --accent:       #0F766E;   /* Teal 700 — brand accent */
     --accent-light: #5EEAD4;
-    --success:      #047857;
+    --success:      #059669;
     --success-dk:   #064E3B;
-    --warn:         #B45309;
+    --warn:         #D97706;
     --warn-dk:      #78350F;
-    --danger:       #BE123C;
-    --danger-dk:    #881337;
-    --ink:          #1C1917;
-    --ink-soft:     #292524;
-    --slate-700:    #44403C;
-    --slate-600:    #57534E;
-    --slate-500:    #78716C;
-    --slate-400:    #A8A29E;
-    --slate-300:    #D6D3D1;
-    --slate-200:    #E7E5E4;
-    --slate-100:    #F5F5F4;
-    --slate-50:     #FAFAF9;
+    --danger:       #DC2626;
+    --danger-dk:    #7F1D1D;
+    --ink:          #0F172A;
+    --ink-soft:     #1E293B;
+    --slate-700:    #334155;
+    --slate-600:    #475569;
+    --slate-500:    #64748B;
+    --slate-400:    #94A3B8;
+    --slate-300:    #CBD5E1;
+    --slate-200:    #E2E8F0;
+    --slate-100:    #F1F5F9;
+    --slate-50:     #F8FAFC;
     /* 8-pt spacing scale */
     --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
     --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
-    /* Modular type scale (1.200) on 16px base */
-    --fs-display: 2.5rem;    /* 40px */
-    --fs-h1:      2rem;      /* 32px */
-    --fs-h2:      1.5rem;    /* 24px */
-    --fs-h3:      1.25rem;   /* 20px */
-    --fs-h4:      1.0625rem; /* 17px */
-    --fs-body:    1rem;      /* 16px */
-    --fs-small:   0.875rem;  /* 14px */
-    --fs-micro:   0.75rem;   /* 12px */
+    /* Fluid type scale (1.200 on 16px) */
+    --fs-display: clamp(2rem, 3.5vw, 2.75rem);
+    --fs-h1:      clamp(1.75rem, 2.5vw, 2rem);
+    --fs-h2:      1.25rem;
+    --fs-h3:      1.0625rem;
+    --fs-h4:      1rem;
+    --fs-body:    clamp(0.9375rem, 0.875rem + 0.2vw, 1rem);
+    --fs-small:   0.875rem;
+    --fs-micro:   0.75rem;
     /* Line-heights */
     --lh-tight:   1.15;
     --lh-heading: 1.3;
@@ -2191,11 +2161,10 @@ GLOBAL_CSS: Final[str] = """
     --radius-md:  10px;
     --radius-lg:  14px;
     --radius-xl:  20px;
-    --shadow-sm:  0 1px 2px rgba(28,25,23,0.04),
-                  0 1px 3px rgba(28,25,23,0.06);
-    --shadow-md:  0 4px 6px rgba(28,25,23,0.04),
-                  0 10px 24px rgba(28,25,23,0.06);
-    --shadow-brand: 0 4px 12px rgba(79,70,229,0.22);
+    --shadow-sm:  0 1px 2px rgba(15,23,42,0.05),
+                  0 1px 3px rgba(15,23,42,0.06);
+    --shadow-md:  0 4px 6px rgba(15,23,42,0.04),
+                  0 10px 24px rgba(15,23,42,0.06);
   }
 
   html, body, [class*="css"], .stApp {
@@ -2208,9 +2177,8 @@ GLOBAL_CSS: Final[str] = """
   }
   .stApp { background: var(--slate-50); }
 
-  h1, h2, h3, .app-hero-title, .hero-headline,
-  .hero-label {
-    font-family: 'Instrument Sans', 'Inter', system-ui, sans-serif !important;
+  h1, h2, h3, .app-hero-title {
+    font-family: 'Inter', system-ui, sans-serif !important;
     letter-spacing: -0.02em;
     color: var(--ink);
     line-height: var(--lh-heading);
@@ -2218,26 +2186,24 @@ GLOBAL_CSS: Final[str] = """
   h1, .app-hero-title { line-height: var(--lh-tight); }
   code, .stCodeBlock { font-family: 'JetBrains Mono', monospace !important; }
 
+  /* ── Hero ────────────────────────────────────────────────────────── */
   .app-hero {
     display: flex;
     align-items: center;
     gap: var(--s6);
-    background: linear-gradient(135deg, #F0FDFA 0%, #FFFFFF 55%, #EEF2FF 100%);
+    background: linear-gradient(135deg, #F0F9FF 0%, #FFFFFF 55%, #ECFEFF 100%);
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-xl);
     padding: var(--s6) var(--s7);
     margin-bottom: var(--s5);
-    box-shadow: 0 8px 32px rgba(15,118,110,0.10);
+    box-shadow: 0 8px 32px rgba(14,165,233,0.08);
   }
-  .app-hero-logo {
-    flex-shrink: 0; width: 110px; height: auto; object-fit: contain;
-  }
+  .app-hero-logo { flex-shrink: 0; width: 104px; height: auto; object-fit: contain; }
   .app-hero-content { flex: 1; min-width: 0; }
   .app-hero-eyebrow {
     font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.18em; text-transform: uppercase;
-    color: var(--accent); margin-bottom: var(--s3);
-    font-family: 'Instrument Sans', sans-serif !important;
+    color: var(--brand); margin-bottom: var(--s3);
   }
   .app-hero-title {
     font-size: var(--fs-display) !important; font-weight: 800 !important;
@@ -2246,15 +2212,15 @@ GLOBAL_CSS: Final[str] = """
     letter-spacing: -0.03em !important; display: block;
   }
   .app-hero-title b {
-    color: var(--accent);
-    background: linear-gradient(120deg, var(--accent) 0%, var(--brand) 100%);
+    color: var(--brand);
+    background: linear-gradient(120deg, var(--brand) 0%, var(--accent) 100%);
     -webkit-background-clip: text; background-clip: text;
     -webkit-text-fill-color: transparent;
   }
   @supports not ((-webkit-background-clip: text) or (background-clip: text)) {
     .app-hero-title b {
-      color: var(--accent) !important; background: none !important;
-      -webkit-text-fill-color: var(--accent) !important;
+      color: var(--brand) !important; background: none !important;
+      -webkit-text-fill-color: var(--brand) !important;
     }
   }
   .app-hero-sub {
@@ -2265,6 +2231,7 @@ GLOBAL_CSS: Final[str] = """
     display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center;
   }
 
+  /* ── Headings ───────────────────────────────────────────────────── */
   h1 { color: var(--ink); font-weight: 800; font-size: var(--fs-h1);
        line-height: var(--lh-tight); margin-bottom: var(--s3); }
   h2 { color: var(--ink); font-weight: 700; font-size: var(--fs-h2);
@@ -2292,16 +2259,15 @@ GLOBAL_CSS: Final[str] = """
 
   /* ── Sidebar ─────────────────────────────────────────────────────── */
   section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1C1917 0%, #115E59 100%);
+    background: linear-gradient(180deg, #0F172A 0%, #115E59 100%);
     border-right: 1px solid #134E4A;
     padding-top: var(--s4);
   }
-  section[data-testid="stSidebar"] * { color: #E7E5E4 !important; }
+  section[data-testid="stSidebar"] * { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] h1,
   section[data-testid="stSidebar"] h2,
   section[data-testid="stSidebar"] h3 {
     color: #FFFFFF !important; font-weight: 700;
-    font-family: 'Instrument Sans', sans-serif !important;
   }
   section[data-testid="stSidebar"] .stSelectbox label,
   section[data-testid="stSidebar"] .stMultiSelect label {
@@ -2313,10 +2279,10 @@ GLOBAL_CSS: Final[str] = """
     border-color: rgba(255,255,255,0.08) !important;
     margin: var(--s4) 0;
   }
-  section[data-testid="stSidebar"] table { color: #E7E5E4 !important; }
+  section[data-testid="stSidebar"] table { color: #E2E8F0 !important; }
   section[data-testid="stSidebar"] th,
   section[data-testid="stSidebar"] td {
-    color: #E7E5E4 !important;
+    color: #E2E8F0 !important;
     border-color: #134E4A !important;
     font-size: var(--fs-small) !important;
     padding: var(--s2) var(--s3) !important;
@@ -2334,8 +2300,8 @@ GLOBAL_CSS: Final[str] = """
   }
 
   .sidebar-warning {
-    background: rgba(180,83,9,0.14);
-    border: 1px solid rgba(180,83,9,0.42);
+    background: rgba(217,119,6,0.14);
+    border: 1px solid rgba(217,119,6,0.42);
     border-left: 3px solid var(--warn);
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
@@ -2344,7 +2310,7 @@ GLOBAL_CSS: Final[str] = """
     line-height: var(--lh-caption);
   }
   .sidebar-warning strong { color: #FCD34D !important; display: block; margin-bottom: var(--s1); }
-  .sidebar-warning span   { color: #E7E5E4 !important; }
+  .sidebar-warning span   { color: #E2E8F0 !important; }
 
   .sidebar-headline {
     background: rgba(15,118,110,0.20);
@@ -2364,14 +2330,14 @@ GLOBAL_CSS: Final[str] = """
     color: #FFFFFF !important; font-size: var(--fs-small); display: block;
     margin-bottom: var(--s1);
   }
-  .sidebar-headline span { color: #D6D3D1 !important; font-size: var(--fs-small); }
+  .sidebar-headline span { color: #CBD5E1 !important; font-size: var(--fs-small); }
   .sidebar-headline span b { color: #FFFFFF !important; }
 
   /* ── Metrics ─────────────────────────────────────────────────────── */
   [data-testid="stMetric"] {
     background: #FFFFFF;
     border: 1px solid var(--slate-200);
-    border-left: 5px solid var(--accent);
+    border-left: 5px solid var(--brand);
     border-radius: var(--radius-lg);
     padding: var(--s5);
     box-shadow: var(--shadow-sm);
@@ -2381,7 +2347,7 @@ GLOBAL_CSS: Final[str] = """
   [data-testid="stMetric"]:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-md);
-    border-left-color: var(--brand);
+    border-left-color: var(--accent);
   }
   [data-testid="stMetricLabel"] {
     color: var(--slate-500) !important;
@@ -2396,7 +2362,7 @@ GLOBAL_CSS: Final[str] = """
     font-size: clamp(1.4rem, 1.2rem + 0.6vw, 1.85rem) !important;
     letter-spacing: -0.025em;
     line-height: 1.15;
-    font-family: 'Instrument Sans', 'Inter', system-ui, sans-serif !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
     font-feature-settings: "tnum" 1, "ss01" 1;
     margin-top: var(--s1);
   }
@@ -2411,7 +2377,7 @@ GLOBAL_CSS: Final[str] = """
     background: #FFFFFF;
     border: 1px solid var(--slate-200) !important;
     border-radius: var(--radius-lg) !important;
-    padding: var(--s4) var(--s5) !important;
+    padding: var(--s5) !important;
     box-shadow: var(--shadow-sm);
     margin-bottom: var(--s5);
     transition: box-shadow 0.2s ease;
@@ -2435,13 +2401,13 @@ GLOBAL_CSS: Final[str] = """
     margin-bottom: var(--s3);
     text-transform: uppercase;
   }
-  .chip-action  { background: #FFE4E6; color: #881337; }
+  .chip-action  { background: #FEE2E2; color: #7F1D1D; }
   .chip-monitor { background: #FEF3C7; color: #78350F; }
   .chip-fyi     { background: #CCFBF1; color: #115E59; }
 
   /* ── Buttons / alerts / expanders ────────────────────────────────── */
   .stButton > button {
-    background: var(--accent); color: #FFFFFF;
+    background: var(--brand); color: #FFFFFF;
     border: none; border-radius: var(--radius-md);
     padding: var(--s3) var(--s5); font-weight: 600;
     font-size: var(--fs-body);
@@ -2449,10 +2415,9 @@ GLOBAL_CSS: Final[str] = """
                 box-shadow 0.15s ease;
   }
   .stButton > button:hover {
-    background: var(--accent-light);
-    color: var(--ink);
+    background: var(--brand-dark);
     transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(15,118,110,0.22);
+    box-shadow: 0 4px 12px rgba(14,165,233,0.22);
   }
   [data-testid="stAlert"] {
     background-color: #FEF3C7;
@@ -2468,8 +2433,7 @@ GLOBAL_CSS: Final[str] = """
     margin-bottom: var(--s3);
   }
   [data-testid="stExpander"] summary {
-    font-weight: 600; color: var(--accent);
-    font-family: 'Instrument Sans', sans-serif !important;
+    font-weight: 600; color: var(--brand);
     font-size: var(--fs-body);
   }
   .stSlider label {
@@ -2486,7 +2450,7 @@ GLOBAL_CSS: Final[str] = """
     background: #FFFFFF;
     border: 1px solid var(--slate-200);
     border-radius: var(--radius-lg);
-    padding: var(--s2) var(--s3);
+    padding: var(--s2);
     margin: var(--s2) 0 var(--s4) 0;
     box-shadow: var(--shadow-sm);
   }
@@ -2514,9 +2478,9 @@ GLOBAL_CSS: Final[str] = """
     white-space: nowrap;
   }
   .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) {
-    background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dark, #115E59) 100%);
-    border-color: var(--accent-light);
-    box-shadow: 0 4px 12px rgba(15,118,110,0.28);
+    background: var(--brand);
+    border-color: var(--brand-light);
+    box-shadow: 0 4px 12px rgba(14,165,233,0.28);
   }
   .nav-tabs-anchor + div [role="radiogroup"] label:has(input:checked) p {
     color: #FFFFFF !important;
@@ -2526,9 +2490,9 @@ GLOBAL_CSS: Final[str] = """
   /* ── Tab takeaway strip ──────────────────────────────────────────── */
   .takeaway-strip {
     display: flex; align-items: center; gap: var(--s3);
-    background: linear-gradient(90deg, #F0FDFA 0%, #FFFFFF 100%);
-    border: 1px solid var(--accent-light);
-    border-left: 4px solid var(--accent);
+    background: linear-gradient(90deg, #F0F9FF 0%, #FFFFFF 100%);
+    border: 1px solid #BAE6FD;
+    border-left: 4px solid var(--brand);
     border-radius: var(--radius-md);
     padding: var(--s2) var(--s4);
     margin: 0 0 var(--s4) 0;
@@ -2537,9 +2501,10 @@ GLOBAL_CSS: Final[str] = """
     flex-shrink: 0;
     font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--accent);
+    color: var(--brand);
     padding-right: var(--s3);
-    border-right: 1px solid var(--accent-light);
+    border-right: 1px solid #BAE6FD;
+    white-space: nowrap;
   }
   .takeaway-body {
     font-size: var(--fs-small); color: var(--slate-700);
@@ -2563,10 +2528,10 @@ GLOBAL_CSS: Final[str] = """
   }
   .info-card.warn { border-left-color: var(--danger); }
   .info-card.ok   { border-left-color: var(--success); }
-  .info-card.info { border-left-color: var(--accent); }
+  .info-card.info { border-left-color: var(--brand); }
   .info-card.warn h4 { color: var(--danger); }
   .info-card.ok h4   { color: var(--success); }
-  .info-card.info h4 { color: var(--accent); }
+  .info-card.info h4 { color: var(--brand); }
   .info-card p, .info-card li {
     color: var(--slate-700); line-height: 1.7;
     font-size: var(--fs-body);
@@ -2587,56 +2552,40 @@ GLOBAL_CSS: Final[str] = """
   .priority-medium { background: var(--warn); }
   .priority-low    { background: var(--success); }
 
-  /* ── Hero / strip banners ────────────────────────────────────────── */
-  .hero-banner, .headline-strip {
+  /* ── Headline strip ──────────────────────────────────────────────── */
+  .headline-strip {
     display: flex; align-items: center; gap: var(--s3);
     border-radius: var(--radius-lg);
     padding: var(--s4) var(--s5);
     margin: var(--s4) 0;
+    background: linear-gradient(90deg, #F0F9FF 0%, #FFFFFF 100%);
+    border: 1px solid #BAE6FD;
+    border-left: 4px solid var(--brand);
   }
-  .hero-banner {
-    background: linear-gradient(135deg, #F0FDFA 0%, #CCFBF1 55%, #A7F3D0 100%);
-    border: 1px solid var(--accent-light);
-    border-left: 4px solid var(--accent);
-    box-shadow: 0 2px 12px rgba(15,118,110,0.14);
-  }
-  .headline-strip {
-    background: linear-gradient(90deg, #F0FDFA 0%, #FFFFFF 100%);
-    border: 1px solid var(--accent-light);
-    border-left: 4px solid var(--accent);
-  }
-  .hero-banner .hero-icon, .headline-strip-icon {
-    font-size: 22px; line-height: 1; flex-shrink: 0;
-  }
-  .hero-banner .hero-text,
+  .headline-strip-icon { font-size: 22px; line-height: 1; flex-shrink: 0; }
   .headline-strip .headline-strip-text { flex: 1; min-width: 0; }
-  .hero-banner .hero-label,
   .headline-strip .headline-strip-label {
     display: block; font-size: var(--fs-micro); font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--accent); margin-bottom: var(--s1);
+    color: var(--brand); margin-bottom: var(--s1);
   }
-  .hero-banner .hero-headline,
   .headline-strip-text p {
     font-size: var(--fs-body); font-weight: 500;
     color: var(--slate-700); line-height: var(--lh-body);
-    margin: 0; letter-spacing: normal;
+    margin: 0;
   }
-  .hero-banner .hero-headline b,
-  .headline-strip-text b {
-    color: var(--accent-dark, #115E59); font-weight: 700;
-  }
+  .headline-strip-text b { color: var(--brand-dark); font-weight: 700; }
 
   /* ── Action bar (decision banner) ────────────────────────────────── */
   .action-bar {
     display: flex; align-items: center; gap: var(--s4);
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDF4 100%);
-    border: 1px solid var(--success-light, #6EE7B7);
+    border: 1px solid #6EE7B7;
     border-left: 4px solid var(--success);
     border-radius: var(--radius-lg);
     padding: var(--s3) var(--s5);
     margin: var(--s3) 0 var(--s4) 0;
-    box-shadow: 0 2px 8px rgba(4,120,87,0.10);
+    box-shadow: 0 2px 8px rgba(5,150,105,0.10);
   }
   .action-bar-label {
     flex-shrink: 0;
@@ -2664,10 +2613,9 @@ GLOBAL_CSS: Final[str] = """
   /* ── Scope pills ─────────────────────────────────────────────────── */
   .scope-pill {
     display: inline-block;
-    background: linear-gradient(135deg, var(--accent) 0%, var(--brand) 100%);
-    color: #FFFFFF; border-radius: 999px;
+    background: var(--brand); color: #FFFFFF; border-radius: 999px;
     padding: var(--s2) var(--s4); font-size: var(--fs-small); font-weight: 600;
-    box-shadow: 0 2px 10px rgba(15,118,110,0.28);
+    box-shadow: 0 2px 10px rgba(14,165,233,0.28);
   }
   .scope-pill-subtle {
     display: inline-block; background: var(--slate-100);
@@ -2679,7 +2627,7 @@ GLOBAL_CSS: Final[str] = """
   /* ── Insight box ─────────────────────────────────────────────────── */
   .insight {
     display: flex; gap: var(--s3); align-items: flex-start;
-    background: #F0FDFA; border-left: 3px solid var(--accent-light);
+    background: #F0F9FF; border-left: 3px solid #7DD3FC;
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin-top: var(--s3);
@@ -2687,29 +2635,29 @@ GLOBAL_CSS: Final[str] = """
   }
   .insight-chip {
     flex-shrink: 0;
-    background: var(--accent); color: #FFFFFF;
+    background: var(--brand); color: #FFFFFF;
     padding: var(--s1) var(--s3); border-radius: 999px;
     font-size: var(--fs-micro); font-weight: 700; white-space: nowrap;
   }
   .insight-body { display: flex; flex-direction: column; gap: var(--s1); }
   .insight-scope {
-    font-size: var(--fs-micro); font-weight: 700; color: var(--accent);
+    font-size: var(--fs-micro); font-weight: 700; color: var(--brand);
     text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.9;
   }
   .insight-text { color: var(--slate-600); line-height: var(--lh-body); }
   .insight-text b { color: var(--ink); font-weight: 700; }
   .insight-impl {
     display: block; margin-top: var(--s2); padding-top: var(--s2);
-    border-top: 1px dashed var(--accent-light);
+    border-top: 1px dashed #7DD3FC;
     color: var(--ink-soft); font-weight: 500;
   }
-  .insight-text .insight-impl b { color: var(--accent); }
+  .insight-text .insight-impl b { color: var(--brand); }
 
   /* ── Verdict card ────────────────────────────────────────────────── */
   .verdict-card {
     display: flex; flex-direction: column; gap: var(--s1);
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDFA 100%);
-    border: 1px solid var(--accent-light); border-left: 4px solid var(--success);
+    border: 1px solid #6EE7B7; border-left: 4px solid var(--success);
     border-radius: var(--radius-md);
     padding: var(--s3) var(--s4);
     margin: var(--s3) 0;
@@ -2728,17 +2676,16 @@ GLOBAL_CSS: Final[str] = """
   .empty-state {
     text-align: center; padding: var(--s7) var(--s5);
     background: var(--slate-50);
-    border: 1px dashed var(--slate-300);
     border-radius: var(--radius-lg);
   }
   .empty-icon { font-size: 40px; }
   .empty-title {
     font-size: var(--fs-h4); font-weight: 700; color: var(--slate-700);
-    margin: var(--s2) 0; font-family: 'Instrument Sans', sans-serif;
+    margin: var(--s2) 0;
   }
   .empty-body { color: var(--slate-500); font-size: var(--fs-body); }
   .empty-hint {
-    margin-top: var(--s3); color: var(--accent);
+    margin-top: var(--s3); color: var(--brand);
     font-size: var(--fs-small); font-weight: 500;
   }
 
@@ -2761,9 +2708,6 @@ GLOBAL_CSS: Final[str] = """
                  'Segoe UI', sans-serif;
     text-rendering: optimizeLegibility;
   }
-  .stCaption, [data-testid="stCaptionContainer"] {
-    line-height: var(--lh-caption);
-  }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
       scroll-behavior: auto !important;
@@ -2776,14 +2720,14 @@ GLOBAL_CSS: Final[str] = """
   @media (max-width: 1100px) {
     .app-hero { flex-direction: column; align-items: flex-start;
                 padding: var(--s5); gap: var(--s4); }
-    .app-hero-logo { width: 84px; }
+    .app-hero-logo { width: 80px; }
     [data-testid="stMetric"] { padding: var(--s4); }
   }
   @media (max-width: 768px) {
     .block-container { padding: var(--s3) !important; }
     .app-hero { padding: var(--s5) var(--s4); }
     .app-hero-title { font-size: var(--fs-h1) !important; }
-    .hero-banner, .headline-strip {
+    .headline-strip {
       flex-direction: column; align-items: flex-start;
     }
     .nav-tabs-anchor + div [role="radiogroup"] label p {
@@ -2805,24 +2749,24 @@ def _apply_global_style() -> None:
             "figure.facecolor":   "#FFFFFF",
             "axes.facecolor":     "#FFFFFF",
             "axes.grid":          False,
-            "grid.color":         "#E7E5E4",
+            "grid.color":         "#E2E8F0",
             "grid.linewidth":     0.8,
             "axes.spines.top":    False,
             "axes.spines.right":  False,
             "axes.spines.left":   False,
             "axes.spines.bottom": True,
-            "axes.edgecolor":     "#D6D3D1",
+            "axes.edgecolor":     "#CBD5E1",
             "axes.linewidth":     0.9,
             "font.family":        "sans-serif",
             "font.size":          11,
             "axes.titlesize":     14,
             "axes.titleweight":   "bold",
-            "axes.titlecolor":    "#1C1917",
+            "axes.titlecolor":    "#0F172A",
             "axes.titlelocation": "left",
             "axes.labelsize":     11,
-            "axes.labelcolor":    "#57534E",
-            "xtick.color":        "#78716C",
-            "ytick.color":        "#78716C",
+            "axes.labelcolor":    "#475569",
+            "xtick.color":        "#64748B",
+            "ytick.color":        "#64748B",
             "xtick.labelsize":    10,
             "ytick.labelsize":    10,
             "legend.frameon":     False,
@@ -2847,17 +2791,14 @@ NAV_TABS: Final[tuple[str, ...]] = (
 
 def render_nav_tabs() -> str:
     """Horizontal in-page navigation (replaces the old sidebar radio)."""
-    current = st.session_state.get("active_tab", NAV_TABS[0])
-    try:
-        idx = NAV_TABS.index(current)
-    except ValueError:
-        idx = 0
-
+    # NOTE: do NOT read st.session_state["active_tab"] here — the widget
+    # owns that key. We pass a fixed index; Streamlit restores the widget's
+    # own state automatically on reruns.
     st.markdown('<div class="nav-tabs-anchor"></div>', unsafe_allow_html=True)
     selected = st.radio(
         "Navigation",
         options=NAV_TABS,
-        index=idx,
+        index=0,
         horizontal=True,
         label_visibility="collapsed",
         key="active_tab",
@@ -2920,6 +2861,8 @@ def render_sidebar() -> tuple[str, tuple[str, ...]]:
             st.sidebar.button("↺  Reset filters", on_click=_reset_filters)
 
     st.sidebar.divider()
+    # NOTE: we do NOT set st.session_state["story_mode"] here — the checkbox
+    # owns that key. We set the default BEFORE this call in main().
     st.sidebar.checkbox(
         "🎬  Story mode (hide filters for presentation)",
         key="story_mode",
@@ -2979,7 +2922,7 @@ def render_overview(year: str, states: tuple[str, ...],
                 unsafe_allow_html=True,
             )
 
-    k = query_kpis(year, states)
+    k = query_kpis(year, states, data_signature=_data_signature())
     c1, c2, c3, c4, c5 = st.columns(5, gap="medium")
     c1.metric("Total Orders", fmt_int(k["total_orders"]))
     c2.metric(
@@ -3006,7 +2949,8 @@ def render_overview(year: str, states: tuple[str, ...],
               delta=late_delta, delta_color="inverse")
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
-    gmv = query_gmv(year, states, GMV_DEFINITION)
+    gmv = query_gmv(year, states, GMV_DEFINITION,
+                    data_signature=_data_signature())
     if gmv is not None:
         gcols = st.columns(1, gap="medium")
         label = ("GMV · merchandise excl. freight"
@@ -3048,7 +2992,6 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     try:
         render_decision_snapshot(year, states)
-        render_decision_insight(year, states)
     except Exception as exc:
         _LOGGER.warning("Decision snapshot failed: %s", exc)
 
@@ -3327,10 +3270,10 @@ def main() -> None:
     )
     _apply_global_style()
 
+    # Set ONLY keys that no widget owns. `story_mode` and `active_tab`
+    # are widget-owned — their defaults come from the widget call itself.
     st.session_state.setdefault("filter_year", "All")
     st.session_state.setdefault("filter_states", [])
-    st.session_state.setdefault("active_tab", NAV_TABS[0])
-    st.session_state.setdefault("story_mode", False)
 
     try:
         load_data(_data_signature())
@@ -3355,7 +3298,7 @@ def main() -> None:
         year, states = "All", ()
 
     try:
-        k_live = query_kpis(year, states)
+        k_live = query_kpis(year, states, data_signature=_data_signature())
     except Exception as exc:
         _LOGGER.exception("KPIs failed")
         st.warning(f"⚠️ KPIs could not compute: {exc}")
@@ -3400,15 +3343,10 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    # Executive summary removed — hero + action bar carry the narrative.
-
-    # Decision banner: surfaces the top recommended actions.
     render_action_bar()
 
-    # In-page horizontal navigation (replaces the old sidebar radio).
     active_tab = render_nav_tabs()
 
-    # Story mode: hide sidebar + footer so the active tab fills the screen.
     story_mode = bool(st.session_state.get("story_mode", False))
     if story_mode:
         st.markdown(
@@ -3420,7 +3358,6 @@ def main() -> None:
             unsafe_allow_html=True,
         )
 
-    # Tab-level takeaway strip.
     render_tab_takeaway(active_tab)
 
     st.write("")
