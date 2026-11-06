@@ -68,7 +68,7 @@ PUNCT_MIN_N_TIER:   Final[int] = 30
 PUNCT_MIN_N_STATUS: Final[int] = 30
 PUNCT_SCENARIOS:    Final[tuple[int, ...]] = (5, 10, 25, 50)
 
-# L8 guard: suppress population-level claims on small selections.
+# L5 guard: suppress population-level claims on small selections.
 MIN_RELIABLE_REVIEWS: Final[int] = 200
 
 REF: Final[dict[str, Any]] = {
@@ -812,7 +812,7 @@ _TAB_TAKEAWAYS: Final[dict[str, tuple[str, str]]] = {
     ),
     "🔬  Detail & Method": (
         "Evidence",
-        "The 1.73★ gap is statistically robust. Read L1–L9 before quoting "
+        "The 1.73★ gap is statistically robust. Read L1–L5 before quoting "
         "a precise lift.",
     ),
     "💡  Recommendations": (
@@ -869,7 +869,7 @@ def chart_review_distribution(year: str = "All",
         _no_data(); return
     pct = 100.0 * counts / total
 
-    # L8 guard: suppress population-level claims on small selections.
+    # L5 guard: suppress population-level claims on small selections.
     reliable = total >= MIN_RELIABLE_REVIEWS
 
     shades = [
@@ -895,54 +895,27 @@ def chart_review_distribution(year: str = "All",
                 fontsize=10, color=PALETTE.slate_700, fontweight="bold")
     _finish(fig)
 
-    s1 = float(pct.get(1, 0.0)); s2 = float(pct.get(2, 0.0))
-    s3 = float(pct.get(3, 0.0)); s5 = float(pct.get(5, 0.0))
+    s1 = float(pct.get(1, 0.0))
+    s5 = float(pct.get(5, 0.0))
     low_share  = float(pct.loc[pct.index.isin([1, 2])].sum())
     high_share = float(pct.loc[pct.index.isin([4, 5])].sum())
-    net = high_share - low_share
 
-    if s1 > s2 and s1 > s3:
-        shape = (
-            f"The distribution is <b>polarised (U-shaped)</b>: 1★ "
-            f"({s1:.1f}%) is larger than both 2★ ({s2:.1f}%) and 3★ "
-            f"({s3:.1f}%), so unhappy customers tend to be <i>very</i> "
-            f"unhappy rather than mildly disappointed — the pattern of a "
-            f"failed experience (such as a late or missing parcel) rather "
-            f"than a marginal product gripe."
+    if not reliable:
+        text = (
+            f"Only <b>{total:,}</b> reviews in this selection — shape is "
+            f"too noisy to interpret (see L5). Widen the filters."
         )
     else:
-        shape = (
-            "Dissatisfaction is spread across the lower stars rather than "
-            "concentrated at 1★, which points to milder, more diffuse "
-            "disappointment."
+        text = (
+            f"<b>{s5:.1f}%</b> give 5★ vs <b>{s1:.1f}%</b> giving 1★; "
+            f"promoters (4–5★) <b>{high_share:.1f}%</b> vs detractors "
+            f"(1–2★) <b>{low_share:.1f}%</b>." + _impl(
+                f"protect the {high_share:.1f}% promoter base and target "
+                f"the {low_share:.1f}% detractor tail — start with "
+                f"delivery, the strongest driver."
+            )
         )
-
-    sentiment_claim = (
-        "Overall sentiment is strongly positive, so the business is not "
-        "broadly failing."
-        if reliable else
-        f"⚠️ With only <b>{total:,}</b> reviews, read this shape with "
-        f"caution — it is a small sample (see L8)."
-    )
-
-    _insight(
-        year, states,
-        f"<b>{s5:.1f}%</b> of {total:,} reviews are 5★ and <b>{s1:.1f}%</b> "
-        f"are 1★; promoters (4–5★) hold <b>{high_share:.1f}%</b> vs "
-        f"detractors (1–2★) at <b>{low_share:.1f}%</b>, a net margin of "
-        f"<b>{net:+.1f} pp</b>. {sentiment_claim} "
-        f"{shape} The detractor tail is where the improvement opportunity "
-        f"sits, and the next charts test whether delivery performance "
-        f"explains it." + _impl(
-            f"keep protecting the experience behind the "
-            f"{high_share:.1f}% of 4–5★ reviews, but aim improvement "
-            f"effort at the {low_share:.1f}% detractors — find the "
-            f"operational problems (starting with delivery) behind the "
-            f"1–2★ reviews rather than treating satisfaction as "
-            f"broadly weak."
-        ),
-        scope=scope_label(year, states),
-    )
+    _insight(year, states, text, scope=scope_label(year, states))
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1163,22 +1136,15 @@ def chart_punctuality_vs_satisfaction(year: str,
         late_share_all = 100.0 * n_late / new_total if new_total else 0.0
         _insight(
             year, states,
-            f"Making <b>{pct}%</b> of the <b>{n_late:,}</b> late orders "
-            f"arrive on time (<b>{converted:,.0f}</b> orders) lifts the "
-            f"selection average from <b>{sel_avg:.3f}★</b> to "
-            f"<b>{new_mean:.3f}★</b> (<b>{new_mean - sel_avg:+.3f}★</b>). "
-            f"Late orders are only <b>{late_share_all:.1f}%</b> of the "
-            f"selection, so the overall average moves modestly, but every "
-            f"order converted is worth about "
-            f"<b>{on_mean - late_mean:.2f}★</b> to that customer, which "
-            f"means the gain is concentrated among the people who would "
-            f"otherwise leave a 1–2★ review. The projection assumes "
-            f"converted orders score at the on-time mean, so it is an "
-            f"upper-bound estimate."
-            + _impl(
-                "set a recovery target for late orders and confirm the "
-                "real lift with a controlled pilot before committing "
-                "logistics spend."
+            f"Fixing <b>{pct}%</b> of <b>{n_late:,}</b> late orders lifts "
+            f"the selection average from <b>{sel_avg:.2f}★</b> to "
+            f"<b>{new_mean:.2f}★</b> (<b>{new_mean - sel_avg:+.2f}★</b>). "
+            f"Each converted order is worth ~<b>{on_mean - late_mean:.2f}★</b> "
+            f"to that customer; late orders are {late_share_all:.1f}% of the "
+            f"selection, so the aggregate lift is modest but the per-customer "
+            f"gain is large." + _impl(
+                "set a recovery target for late orders and validate the "
+                "real lift with a controlled pilot."
             ),
         )
     else:
@@ -1212,44 +1178,24 @@ def chart_punctuality_vs_satisfaction(year: str,
                 f"**{lift_1pct:+.4f}★**."
             )
 
-    q6_gap_txt = f"{q6['gap']:.2f}★"
-    q6_gap_pct = (f"{q6['gap_pct']:.1f}%"
-                  if q6["gap_pct"] is not None else "—")
-    late_share = float(grp.loc[grp.index != "On Time", "tier_share"].sum()) \
-        if len(grp) else 0.0
-    noisy = int((~grp["reliable"]).sum()) if len(grp) else 0
-    noisy_txt = (f" {noisy} tier(s) flagged ⚠️ (n &lt; {PUNCT_MIN_N_TIER}) "
-                 f"— read those bars with caution."
-                 if noisy else "")
     top_det = grp["detractor_rate"].idxmax() if len(grp) else grp.index[0]
     on_time_dr = (float(grp.loc["On Time", "detractor_rate"] * 100)
                   if "On Time" in grp.index else 0.0)
     top_dr = float(grp.loc[top_det, "detractor_rate"] * 100) if len(grp) else 0.0
-    dr_mult = (top_dr / on_time_dr) if on_time_dr > 0 else float("nan")
-    mult_txt = (f" — <b>{dr_mult:.1f}×</b> the on-time rate"
-                if dr_mult == dr_mult else "")
+    late_share = float(grp.loc[grp.index != "On Time", "tier_share"].sum()) \
+        if len(grp) else 0.0
 
     _insight(
         year, states,
-        f"<b>Q6 anchor:</b> on-time <b>{q6['on_time']:.2f}★</b> "
-        f"(n={q6['n_on']:,}) vs late <b>{q6['late']:.2f}★</b> "
-        f"(n={q6['n_late']:,}) — gap <b>{q6_gap_txt}</b> "
-        f"(<b>{q6_gap_pct}</b>) across <b>{late_share:.1f}%</b> of orders "
-        f"that arrived late. The 1–2★ share rises from "
-        f"<b>{on_time_dr:.1f}%</b> (on time) to <b>{top_dr:.1f}%</b> at "
-        f"<i>{top_det}</i>{mult_txt}. Satisfaction "
-        f"falls as lateness grows — a dose–response pattern — so the "
-        f"penalty is driven by <i>how badly</i> the promise is missed, not "
-        f"merely by whether it is missed. This makes delivery punctuality "
-        f"the strongest lever in the data, although it is an association, "
-        f"not proof of causation (see limitation L1).{noisy_txt}"
+        f"On-time <b>{q6['on_time']:.2f}★</b> vs late "
+        f"<b>{q6['late']:.2f}★</b> — a <b>{q6['gap']:.2f}★</b> gap across "
+        f"<b>{late_share:.1f}%</b> of orders. The 1–2★ share climbs from "
+        f"<b>{on_time_dr:.1f}%</b> on time to <b>{top_dr:.1f}%</b> at "
+        f"<i>{top_det}</i> — the longer the miss, the sharper the penalty."
         + _impl(
-            f"prioritise reliability over raw speed — keep promised "
-            f"dates realistic, monitor fulfilment timelines and act "
-            f"before the promised date passes — and focus on stopping "
-            f"delays from becoming prolonged: <i>{top_det}</i> orders "
-            f"show the highest dissatisfaction."
-        )
+            f"prioritise hitting the promise date over raw speed; "
+            f"<i>{top_det}</i> is where the damage concentrates."
+        ),
     )
     _partial_note(year)
 
@@ -1338,26 +1284,11 @@ def chart_satisfaction_by_delivery_bucket(year: str,
     if len(grp) == 1:
         text = (
             f"All delivered orders sit in the <b>{grp.iloc[0]['bucket']}</b> "
-            f"bucket (<b>100.0%</b>, {grp.iloc[0]['avg_score']:.2f}★). "
-            f"With a single bucket there is no "
-            f"delivery-time contrast to read — widen the filters to see how "
-            f"satisfaction changes with waiting time."
+            f"bucket ({grp.iloc[0]['avg_score']:.2f}★) — no delivery-time "
+            f"contrast to read. Widen the filters."
         )
     else:
         first, last = grp.iloc[0], grp.iloc[-1]
-        below = grp.loc[grp["avg_score"] < sel_avg]
-        below_share = float(below["share"].sum())
-        below_txt = (
-            f"<b>{below_share:.1f}%</b> of orders sit in buckets below the "
-            f"average ({', '.join(map(str, below['bucket']))})."
-            if not below.empty else
-            "No bucket falls below the selection average."
-        )
-        fast_share = float(grp.loc[grp["bucket"].astype(str).isin(
-            ["0-5 days", "6-10 days"]), "share"].sum())
-        slow_share = float(grp.loc[grp["bucket"].astype(str).isin(
-            ["21-30 days", "30+ days"]), "share"].sum())
-
         steps = grp["avg_score"].diff()
         cliff_txt = ""
         if steps.notna().any():
@@ -1365,29 +1296,17 @@ def chart_satisfaction_by_delivery_bucket(year: str,
             drop = float(steps.iloc[pos])
             if pos >= 1 and drop < 0:
                 cliff_txt = (
-                    f" The steepest single step is "
-                    f"<b>{grp.iloc[pos - 1]['bucket']} → "
-                    f"{grp.iloc[pos]['bucket']}</b> ({drop:+.2f}★), the "
-                    f"point at which waiting turns into real dissatisfaction."
+                    f" Steepest step: <b>{grp.iloc[pos - 1]['bucket']} → "
+                    f"{grp.iloc[pos]['bucket']}</b> ({drop:+.2f}★)."
                 )
-        trend_word = ("falls steadily"
-                      if first["avg_score"] > last["avg_score"]
-                      else "does not fall with longer waits")
         text = (
-            f"Scores go from <b>{first['avg_score']:.2f}★</b> "
-            f"({first['bucket']}, <b>{fast_share:.1f}%</b> of orders) to "
-            f"<b>{last['avg_score']:.2f}★</b> ({last['bucket']}, "
-            f"<b>{slow_share:.1f}%</b>). {below_txt}{cliff_txt} "
-            f"Satisfaction {trend_word} as delivery "
-            f"time grows, and the decline accelerates in the slowest "
-            f"buckets rather than being linear. Customers tolerate a "
-            f"moderate wait but punish long ones, so the priority is to stop "
-            f"orders drifting into the slow tail — monitor ageing orders "
-            f"and intervene before the steepest step."
-            + _impl(
-                "monitor orders approaching 20 days, send early-warning "
-                "notifications and escalate delayed parcels before they "
-                "reach the 21+ day buckets, where scores fall away."
+            f"Scores fall from <b>{first['avg_score']:.2f}★</b> "
+            f"({first['bucket']}) to <b>{last['avg_score']:.2f}★</b> "
+            f"({last['bucket']}) — a <b>{first['avg_score'] - last['avg_score']:.2f}★</b> "
+            f"drop.{cliff_txt} The penalty concentrates in the slow tail, "
+            f"not evenly across waits." + _impl(
+                "intervene on orders approaching 20 days before they "
+                "enter the 21+ buckets where scores collapse."
             )
         )
     _insight(year, states, text)
@@ -1460,46 +1379,27 @@ def chart_state_scores(year: str, states: tuple[str, ...]) -> None:
 
     if len(plot_df) == 1:
         text = (
-            f"<b>{plot_df.iloc[0]['customer_state']}</b> averages "
-            f"{plot_df.iloc[0]['avg_score']:.2f}★ (<b>100.0%</b> of "
-            f"orders). A single state gives no "
-            f"geographic contrast; select more states to compare."
+            f"<b>{plot_df.iloc[0]['customer_state']}</b> alone at "
+            f"{plot_df.iloc[0]['avg_score']:.2f}★ — no geographic contrast. "
+            f"Select more states."
         )
     else:
         low, high = plot_df.iloc[0], plot_df.iloc[-1]
         spread = high["avg_score"] - low["avg_score"]
-        spread_ratio = _safe_div(spread, high["avg_score"])
-        spread_pct = 100.0 * spread_ratio if spread_ratio is not None else 0.0
-        weak = plot_df.loc[plot_df["avg_score"] < 4.10]
-        weak_share = float(weak["share"].sum())
-
         g = query_headline_gap(year, states)
-        compare_txt = ""
+        cmp_txt = ""
         if g["gap"] is not None and g["gap"] > 0:
-            compare_txt = (
-                f" The state spread is only <b>{100.0 * spread / g['gap']:.0f}%"
-                f"</b> of the on-time↔late gap ({g['gap']:.2f}★), so "
-                f"location matters far less than delivery performance."
+            cmp_txt = (
+                f" That spread is only <b>{100.0 * spread / g['gap']:.0f}%</b> "
+                f"of the {g['gap']:.2f}★ punctuality gap."
             )
         text = (
-            f"<b>{low['customer_state']}</b> ({low['avg_score']:.2f}★, "
-            f"{low['share']:.1f}% of orders) anchors the low end and "
-            f"<b>{high['customer_state']}</b> ({high['avg_score']:.2f}★, "
-            f"{high['share']:.1f}%) the high end — a <b>{spread:.2f}★</b> "
-            f"spread (<b>{spread_pct:.1f}%</b>). <b>{weak_share:.1f}%</b> of "
-            f"orders sit in states scoring &lt; 4.10★.{compare_txt} "
-            f"Satisfaction is fairly uniform across "
-            f"the biggest markets, so there is no broad regional problem — "
-            f"just a few lagging states (red/amber bars). Those are the "
-            f"candidates for targeted operational review, and the next "
-            f"chart checks whether late deliveries explain their lower "
-            f"scores." + _impl(
-                f"investigate regional delivery networks, seller "
-                f"fulfilment and last-mile logistics in lower-scoring "
-                f"states such as <b>{low['customer_state']}</b> rather "
-                f"than applying one identical fix everywhere. A low "
-                f"state score says where to look; it does not prove that "
-                f"location itself causes dissatisfaction."
+            f"<b>{low['customer_state']}</b> ({low['avg_score']:.2f}★) to "
+            f"<b>{high['customer_state']}</b> ({high['avg_score']:.2f}★) — a "
+            f"<b>{spread:.2f}★</b> spread.{cmp_txt}" + _impl(
+                f"location matters far less than delivery; "
+                f"<b>{low['customer_state']}</b> is the place to "
+                f"investigate, not the place to blame."
             )
         )
     _insight(year, states, text)
@@ -1549,13 +1449,10 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
     ax.set_ylim(0, ymax)
 
     for i, (_, r) in enumerate(grp.iterrows()):
-        # Late percentage (red text)
         ax.text(i + w / 2, r["late"] + ymax * 0.015,
                 f"{r['late_pct']:.1f}%",
                 ha="center", va="bottom", fontsize=9,
                 color=PALETTE.danger, fontweight="bold")
-
-        # On-time total count (green text)
         ax.text(i - w / 2, r["on_time"] + ymax * 0.015,
                 f"{int(r['on_time']):,}",
                 ha="center", va="bottom", fontsize=9,
@@ -1567,31 +1464,16 @@ def chart_ontime_by_state(year: str, states: tuple[str, ...]) -> None:
     overall_pct = 100.0 * overall_ratio if overall_ratio is not None else 0.0
     worst = grp.loc[grp["late_pct"].idxmax()]
     best  = grp.loc[grp["late_pct"].idxmin()]
-    worst_mx = (worst["late_pct"] / overall_pct
-                if overall_pct else float("nan"))
-    mx_txt = (f"(<b>{worst_mx:.1f}×</b> group avg) "
-              if worst_mx == worst_mx else "")
     _insight(
         year, states,
-        f"Top-5 states average <b>{overall_pct:.1f}%</b> late; "
-        f"<b>{worst['customer_state']}</b> is worst at "
-        f"<b>{worst['late_pct']:.1f}%</b> {mx_txt}and "
-        f"<b>{best['customer_state']}</b> best at "
-        f"<b>{best['late_pct']:.1f}%</b> — a "
+        f"Top-5 average <b>{overall_pct:.1f}%</b> late; <b>{worst['customer_state']}</b> "
+        f"worst at <b>{worst['late_pct']:.1f}%</b>, <b>{best['customer_state']}</b> "
+        f"best at <b>{best['late_pct']:.1f}%</b> — a "
         f"<b>{worst['late_pct'] - best['late_pct']:.1f} pp</b> spread. "
-        f"The red bars are small next to the green "
-        f"ones everywhere, so most orders arrive on time, but lateness is "
-        f"not evenly spread — <b>{worst['customer_state']}</b> misses its "
-        f"promise much more often than {best['customer_state']}. Compare "
-        f"this with the state score chart: a state that is both late-heavy "
-        f"and low-scoring supports delivery as the cause of lower "
-        f"satisfaction, and is where a logistics fix pays back first."
-        + _impl(
-            f"audit carrier performance, warehouse dispatch, transport "
-            f"routes and last-mile hand-offs in "
-            f"<b>{worst['customer_state']}</b> "
-            f"({worst['late_pct']:.1f}% late vs {overall_pct:.1f}% for the "
-            f"top-5 group), then pilot fixes before scaling them."
+        f"Lateness is uneven; <b>{worst['customer_state']}</b> is where a "
+        f"carrier or last-mile audit pays back first." + _impl(
+            f"audit carrier performance and last-mile hand-offs in "
+            f"<b>{worst['customer_state']}</b> before scaling any fix."
         )
     )
 
@@ -1624,10 +1506,7 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     ax.plot(grp["month"], grp["avg_score"], marker="o",
             color=PALETTE.primary, linewidth=2.4, markersize=6,
             markerfacecolor=PALETTE.white, markeredgewidth=1.8)
-
-    # Leave a little padding so the first/last points don't touch the edges
     ax.margins(x=0.03)
-
     ax.set_title("Monthly Average Review Score (row-level AVG)",
                  pad=14, loc="left")
     ax.set_xlabel("Month"); ax.set_ylabel("Avg review score (1–5)")
@@ -1637,12 +1516,9 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     if hi - lo < 0.5:
         mid = (hi + lo) / 2
         lo, hi = max(1.0, mid - 0.25), min(5.0, mid + 0.25)
-
-    # Add extra space at the top to ensure the annotation doesn't clash
     ax.set_ylim(lo, hi + 0.4)
     _style_axes(ax)
 
-    # Handle X-axis ticks cleanly
     n = len(grp)
     if n > 12:
         step = max(1, n // 12)
@@ -1657,59 +1533,37 @@ def chart_monthly_score(year: str, states: tuple[str, ...]) -> None:
     low_i  = grp["avg_score"].idxmin()
     high_i = grp["avg_score"].idxmax()
 
-    # Highlight the lowest point
     ax.scatter([grp.loc[low_i, "month"]], [grp.loc[low_i, "avg_score"]],
                s=170, color=PALETTE.danger, zorder=5,
                edgecolor=PALETTE.white, linewidth=1.8)
 
-    # Annotate upwards into the empty space instead of downwards into the axis
     ax.annotate(
         f"Lowest\n{grp.loc[low_i,'month']}\n{grp.loc[low_i,'avg_score']:.2f}",
         xy=(grp.loc[low_i, "month"], grp.loc[low_i, "avg_score"]),
-        xytext=(0, 30), textcoords="offset points", # Positive Y moves text up
+        xytext=(0, 30), textcoords="offset points",
         ha="center",
         arrowprops=dict(arrowstyle="->", color=PALETTE.danger, lw=1.2),
         fontsize=9, color=PALETTE.danger, fontweight="bold",
     )
     _finish(fig)
 
-    noisy = int((grp["reviews"] < CONFIG.min_reviews_per_month).sum())
-    noisy_ratio = _safe_div(noisy, len(grp))
-    noisy_pct = 100.0 * noisy_ratio if noisy_ratio is not None else 0.0
-    note = (
-        f" <b>{noisy_pct:.1f}%</b> of months have &lt; "
-        f"{CONFIG.min_reviews_per_month} reviews, so their averages are "
-        f"noisy and should not be over-read."
-    ) if noisy else ""
     swing = grp.loc[high_i, "avg_score"] - grp.loc[low_i, "avg_score"]
-    swing_ratio = _safe_div(swing, grp.loc[high_i, "avg_score"])
-    swing_pct = 100.0 * swing_ratio if swing_ratio is not None else 0.0
-
     g = query_headline_gap(year, states)
     cmp_txt = ""
     if g["gap"] is not None and g["gap"] > 0:
         rel = "smaller" if swing < g["gap"] else "larger"
-        cmp_txt = (f" The swing is {rel} than the on-time↔late gap "
-                   f"({g['gap']:.2f}★).")
+        cmp_txt = (f" That swing is {rel} than the {g['gap']:.2f}★ "
+                   f"punctuality gap.")
     _insight(
         year, states,
-        f"Lowest <b>{grp.loc[low_i,'month']}</b> "
-        f"({grp.loc[low_i,'avg_score']:.2f}★) vs highest "
-        f"<b>{grp.loc[high_i,'month']}</b> "
-        f"({grp.loc[high_i,'avg_score']:.2f}★) — a "
-        f"<b>{swing:.2f}★</b> (<b>{swing_pct:.1f}%</b>) range across the "
-        f"period.{cmp_txt} Satisfaction moves over "
-        f"time rather than holding flat, and the lowest point marks a "
-        f"month where the customer experience visibly deteriorated. Sharp "
-        f"dips usually coincide with demand peaks or logistics disruption "
-        f"stressing delivery (consistent with the delivery finding, though "
-        f"this chart alone cannot prove it) — check late-delivery rates "
-        f"for that month before drawing conclusions.{note}"
-        + _impl(
+        f"Lowest <b>{grp.loc[low_i,'month']}</b> ({grp.loc[low_i,'avg_score']:.2f}★) "
+        f"vs highest <b>{grp.loc[high_i,'month']}</b> "
+        f"({grp.loc[high_i,'avg_score']:.2f}★) — a <b>{swing:.2f}★</b> "
+        f"swing across the period.{cmp_txt} Satisfaction drifts rather than "
+        f"holding flat; the low month usually coincides with demand or "
+        f"logistics stress." + _impl(
             f"pair <b>{grp.loc[low_i,'month']}</b> with that month's "
-            f"late-delivery rate and order volume; if lateness spiked, "
-            f"add a monthly late-rate alert and peak-season capacity "
-            f"planning so dips are caught early."
+            f"late-rate and add a monthly late-rate alert."
         )
     )
     _partial_note(year)
@@ -1841,14 +1695,12 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     norm = mpl.colors.Normalize(vmin=0.0, vmax=max(hi, 1.0))
     cmap = plt.get_cmap("YlGnBu")
 
-    # Use a taller figure so the dense northeast cluster has breathing room
     fig, ax = plt.subplots(figsize=(13.5, 6.5))
     ax.set_axis_off()
     ax.set_title(f"Reviews by State — {scope_label(year, states)}",
                  fontsize=14, fontweight="bold",
                  color=PALETTE.ink_soft, pad=16, loc="left")
 
-    # 1. Draw all polygons
     for _, row in gdf.iterrows():
         st_code = row["state"]
         n = reviews_by_state.get(st_code)
@@ -1857,22 +1709,15 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
             else PALETTE.slate_200
         _plot_geo(ax, row["geometry"], facecolor=face)
 
-    # 2. Define manual offsets for the overlap cluster (Northeast & Southeast)
-    # We split the Northeast into two columns: left (MA, PI, CE) and right (RN, PB, PE, AL, SE)
     offsets = {
-        # Northeast (Left column)
         "MA": (-1.8, 0.0), "PI": (-1.2, -0.3), "CE": (-0.8, 0.6),
-        # Northeast (Right column)
         "RN": (1.2, 1.0), "PB": (1.4, 0.2), "PE": (1.2, -0.6),
         "AL": (1.0, -1.4), "SE": (0.8, -2.0),
-        # Southeast
         "DF": (-0.5, 1.0), "GO": (-1.0, -1.0), "RJ": (1.0, -1.0), "ES": (1.2, 0.5),
         "SP": (-1.0, -0.5), "MG": (1.0, 0.5), "PR": (0.0, -1.0),
-        # North
         "AP": (1.0, -0.5), "RR": (0.0, -0.5),
     }
 
-    # 3. Draw labels
     for _, row in gdf.iterrows():
         st_code = row["state"]
         geom = row["geometry"]
@@ -1905,17 +1750,12 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
                  if (n is not None and total_reviews) else None)
 
         if in_scope and n is not None:
-            # Draw state code + values
             dx, dy = offsets.get(st_code, (0, 0))
             label = f"{st_code}\n{int(n):,}\n{share:.1f}%"
             color, weight = PALETTE.ink, "bold"
 
-            # We'll use ax.annotate for the offset states so the line draws
-            # from the state's center to the label.
             if dx != 0 or dy != 0:
-                # Draw a subtle dot in the actual center
                 ax.scatter(cx, cy, color=PALETTE.slate_400, s=8, zorder=5)
-                # Point the text
                 ax.annotate(
                     label, xy=(cx, cy), xytext=(cx + dx, cy + dy),
                     ha="center", va="center", fontsize=5.5,
@@ -1927,16 +1767,13 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
                 ax.text(cx, cy, label, ha="center", va="center",
                         fontsize=5.5, color=color, fontweight=weight, zorder=5)
         else:
-            # Just show the state code for unselected states
             ax.text(cx, cy, st_code, ha="center", va="center",
                     fontsize=5.0, color=PALETTE.slate_400, fontweight="normal", zorder=5)
 
-    # Set map limits to standard Brazil bounds
     ax.set_xlim(-74.0, -34.0)
     ax.set_ylim(-34.0, 6.0)
     ax.set_aspect("equal")
 
-    # 4. Colorbar with safe formatting
     sm = mpl.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="horizontal",
@@ -1944,45 +1781,29 @@ def chart_brazil_map(year: str, states: tuple[str, ...]) -> None:
     cbar.set_label("Number of reviews", fontsize=10,
                    color=PALETTE.slate_500)
     cbar.ax.tick_params(labelsize=9)
-    # Prevent the colorbar ticks from running together
     cbar.ax.xaxis.set_major_formatter(FuncFormatter(lambda x, pos: f"{int(x):,}"))
 
     _finish(fig)
 
-    # Insight block
     in_scope_pairs = [(s, v) for s, v in reviews_by_state.items()
                       if (not filter_active) or (s in states)]
     if not in_scope_pairs:
         _insight(year, states, "No states match the current filter.")
         return
-    lo_s, lo_v = min(in_scope_pairs, key=lambda x: x[1])
     hi_s, hi_v = max(in_scope_pairs, key=lambda x: x[1])
-    hi_pct = 100.0 * (_safe_div(hi_v, total_reviews) or 0.0)
-    lo_pct = 100.0 * (_safe_div(lo_v, total_reviews) or 0.0)
     top3 = sorted(in_scope_pairs, key=lambda x: x[1], reverse=True)[:3]
     top3_pct = 100.0 * (_safe_div(sum(v for _, v in top3), total_reviews)
                         or 0.0)
     top3_names = ", ".join(s for s, _ in top3)
-    mode = ("Only the selected states are coloured; the rest are greyed."
-            if filter_active else
-            "All 27 states are coloured by review count.")
+    hi_pct = 100.0 * (_safe_div(hi_v, total_reviews) or 0.0)
     _insight(
         year, states,
-        f"<b>{hi_s}</b> has the most reviews ({int(hi_v):,}, "
-        f"<b>{hi_pct:.1f}%</b> of the total) and <b>{lo_s}</b> the fewest "
-        f"({int(lo_v):,}, <b>{lo_pct:.1f}%</b>). The top 3 "
-        f"(<b>{top3_names}</b>) hold <b>{top3_pct:.1f}%</b> of all "
-        f"reviews. {mode} Customer feedback is "
-        f"heavily concentrated in a few large markets, which means their "
-        f"experience largely sets the national average and a delivery "
-        f"improvement there moves overall satisfaction the most. "
-        f"Conversely, low-volume states rest on few reviews, so their "
-        f"averages are volatile — treat them as signals to monitor, not "
-        f"as firm conclusions." + _impl(
-            f"prioritise delivery improvements in the largest markets "
-            f"(<b>{top3_names}</b>) because they move the national "
-            f"average most, and track low-volume states as signals to "
-            f"watch rather than firm conclusions."
+        f"<b>{hi_s}</b> leads with <b>{hi_pct:.1f}%</b> of reviews; top 3 "
+        f"(<b>{top3_names}</b>) hold <b>{top3_pct:.1f}%</b> of all feedback. "
+        f"Feedback is concentrated in a few large markets — a delivery "
+        f"improvement there moves the national average most." + _impl(
+            f"prioritise delivery fixes in <b>{top3_names}</b>; treat "
+            f"low-volume states as signals to monitor, not conclusions."
         )
     )
 
@@ -2098,57 +1919,8 @@ def render_decision_snapshot(year: str, states: tuple[str, ...]) -> None:
     st.caption(claim)
 
 
-def render_executive_summary(year: str, states: tuple[str, ...]) -> None:
-    g = query_headline_gap(year, states)
-
-    if g["gap"] is None:
-        verdict_txt, verdict_color = "Inconclusive", PALETTE.slate_500
-    elif g["gap"] >= 1.5:
-        verdict_txt, verdict_color = "Critical priority", PALETTE.danger
-    elif g["gap"] >= 1.0:
-        verdict_txt, verdict_color = "High priority",   PALETTE.warn
-    elif g["gap"] >= 0.5:
-        verdict_txt, verdict_color = "Moderate",        PALETTE.accent
-    else:
-        verdict_txt, verdict_color = "Healthy",         PALETTE.success
-
-    st.markdown(
-        f"""
-        <div class="exec-summary">
-          <div class="exec-summary-main">
-            <div class="exec-summary-eyebrow">EXECUTIVE SUMMARY · WHOLE-DATASET BASELINE</div>
-            <div class="exec-summary-title">
-              Delivery punctuality is the <b>#1 satisfaction lever</b>
-            </div>
-            <div class="exec-summary-detail">
-              <p style="margin-bottom: 8px;">
-                Delivery punctuality is the #1 satisfaction level. The business maintains a generally positive sentiment, averaging 4.09★ across 99,441 orders. However, 8.1% of delivered orders fail to meet their promised delivery date.
-              </p>
-              <p style="margin-bottom: 8px;">
-                Late deliveries are severely damaging customer loyalty. On-time orders average a healthy score, but late orders lose 1.73★ (40.2%) on average. This is a statistically robust gap that dwarfs any geographic or product-category differences.
-              </p>
-              <p style="margin-bottom: 8px;">
-                The damage compounds over time. Orders delayed by just 1–3 days see a sharp spike in 1–2★ reviews. If an order drifts past 20 days, the detractor rate skyrockets, meaning customers are highly likely to leave a negative review and potentially churn.
-              </p>
-              <p style="margin-bottom: 0;">
-                Shift the operational focus from speed to reliability. Implement early-warning interventions for orders approaching day 20, and recalibrate ETA estimates so the business promises what it can actually deliver. Addressing punctuality is the highest-ROI path to lifting overall satisfaction.
-              </p>
-            </div>
-          </div>
-          <div class="exec-summary-badge"
-               style="border-color:{verdict_color};
-                      background:{verdict_color}1A; color:{verdict_color};">
-            <span class="exec-summary-badge-label">Priority</span>
-            <span class="exec-summary-badge-value">{verdict_txt}</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def render_action_bar() -> None:
-    """Compact decision banner that translates the exec summary into action."""
+    """Compact decision banner that translates the headline into action."""
     st.markdown(
         """
         <div class="action-bar">
@@ -2169,19 +1941,13 @@ def render_kpi_insight(year: str, states: tuple[str, ...]) -> None:
     if not k.get("total_orders"):
         return
     text = (
-        f"<b>{fmt_int(k['delivered_orders'])}</b> of "
-        f"<b>{fmt_int(k['total_orders'])}</b> orders "
-        f"(<b>{fmt_pct(k['delivered_pct'])}</b>) were delivered, yet the "
-        f"average delivery took <b>{fmt_float(k['avg_delivery_days'])} "
-        f"days</b> and <b>{fmt_int(k['late_deliveries'])}</b> deliveries "
-        f"(<b>{fmt_pct(k['late_pct'])}</b> of delivered) were late. "
-        f"A high completion rate shows fulfilment "
-        f"works for most orders, but completing an order does not by itself "
-        f"satisfy the customer — the timeliness of fulfilment matters just "
-        f"as much."
-    ) + _impl(
-        "track both delivery completion and adherence to the promised "
-        "date when judging logistics performance."
+        f"<b>{fmt_pct(k['delivered_pct'])}</b> of orders were delivered, "
+        f"but <b>{fmt_pct(k['late_pct'])}</b> of those deliveries were late "
+        f"and the average wait was <b>{fmt_float(k['avg_delivery_days'])} "
+        f"days</b>. Completing an order is not the same as satisfying the "
+        f"customer — timeliness is what moves the score." + _impl(
+            "judge logistics on on-time performance, not completion rate."
+        )
     )
     _insight(year, states, text)
 
@@ -2193,18 +1959,14 @@ def render_decision_insight(year: str, states: tuple[str, ...]) -> None:
     pct_txt = (f" (<b>{g['gap_pct']:.1f}%</b>)"
                if g["gap_pct"] is not None else "")
     text = (
-        f"Orders delivered on time average <b>{g['on_time']:.2f}★</b> "
-        f"(n={g['n_on']:,}) versus <b>{g['late']:.2f}★</b> for late orders "
-        f"(n={g['n_late']:,}) — a gap of <b>{g['gap']:.2f}★</b>{pct_txt}. "
-        f"Customers who receive orders within the "
-        f"promised period report far better experiences, which suggests "
-        f"that meeting the delivery commitment may matter more than "
-        f"delivering faster. This is an association, not proof of "
-        f"causation (limitation L1)."
-    ) + _impl(
-        "make delivery reliability a core satisfaction priority: monitor "
-        "fulfilment timelines and address delays before the promised "
-        "delivery date."
+        f"On-time orders average <b>{g['on_time']:.2f}★</b> "
+        f"(n={g['n_on']:,}) vs <b>{g['late']:.2f}★</b> for late ones "
+        f"(n={g['n_late']:,}) — a <b>{g['gap']:.2f}★</b> gap{pct_txt}. "
+        f"Meeting the promise matters more than delivering faster "
+        f"(association, not causation — see L1)." + _impl(
+            "make on-time delivery the KPI the logistics team is "
+            "measured on."
+        )
     )
     _insight(year, states, text)
 
@@ -2223,17 +1985,14 @@ def render_data_quality_insight() -> None:
         _LOGGER.warning("Data-quality insight failed: %s", exc)
         return
     text = (
-        f"<b>{review_rows:,}</b> review records belong to "
-        f"<b>{distinct_orders:,}</b> distinct orders — <b>{extra:,}</b> "
-        f"extra records from orders reviewed more than once — and "
-        f"<b>{customer_rows:,}</b> customer rows represent only "
-        f"<b>{unique_customers:,}</b> unique customer identities. "
-        f"Counting review rows as orders, or "
-        f"customer rows as people, would inflate both figures."
-    ) + _impl(
-        "average multiple reviews to order level for order-level "
-        "analysis and use <code>customer_unique_id</code> for any "
-        "person-level count, so decisions rest on reliable feedback data."
+        f"<b>{review_rows:,}</b> review rows cover <b>{distinct_orders:,}</b> "
+        f"orders (<b>{extra:,}</b> fan-out rows), and <b>{customer_rows:,}</b> "
+        f"customer rows represent <b>{unique_customers:,}</b> unique people. "
+        f"Counting rows as orders or people would inflate both figures."
+        + _impl(
+            "dedupe reviews to order grain and use "
+            "<code>customer_unique_id</code> for person-level counts."
+        )
     )
     _insight(
         "All", (), text,
@@ -2366,15 +2125,12 @@ def render_priority_matrix() -> None:
     )
     _insight(
         "All", (),
-        "Two actions combine high impact with low effort: <b>R2</b> "
-        "(intervene on ageing orders before day 20) and <b>R5</b> (promise "
-        "reliability, not speed), so they can start immediately. "
-        "<b>R1</b> (Rio de Janeiro delivery failures) has the largest "
-        "ceiling but needs a medium-effort audit and pilot. <b>R3</b> and "
-        "<b>R4</b> follow once the first results show which fixes work."
-        + _impl(
-            "start with R2 and R5 now, run the RJ investigation in "
-            "parallel, and use what it finds to shape the Bahia pilot."
+        "Two quick wins: <b>R2</b> (day-20 ageing alerts) and <b>R5</b> "
+        "(promise reliability, not speed) — both high impact, low effort. "
+        "<b>R1</b> (RJ delivery audit) has the highest ceiling but needs a "
+        "pilot first." + _impl(
+            "launch R2 and R5 now; run the RJ audit in parallel and "
+            "use its findings to shape the Bahia pilot."
         ),
         scope="Whole dataset · recommendations (unfiltered)",
     )
@@ -2452,8 +2208,8 @@ GLOBAL_CSS: Final[str] = """
   }
   .stApp { background: var(--slate-50); }
 
-  h1, h2, h3, .app-hero-title, .hero-headline, .exec-summary-title,
-  .hero-label, .exec-summary-eyebrow {
+  h1, h2, h3, .app-hero-title, .hero-headline,
+  .hero-label {
     font-family: 'Instrument Sans', 'Inter', system-ui, sans-serif !important;
     letter-spacing: -0.02em;
     color: var(--ink);
@@ -2871,50 +2627,7 @@ GLOBAL_CSS: Final[str] = """
     color: var(--accent-dark, #115E59); font-weight: 700;
   }
 
-  /* ── Executive summary ───────────────────────────────────────────── */
-  .exec-summary {
-    display: flex; align-items: stretch; gap: var(--s5);
-    background: linear-gradient(135deg, #FFFFFF 0%, #F0FDFA 100%);
-    border: 1px solid var(--slate-200);
-    border-radius: var(--radius-lg);
-    padding: var(--s5) var(--s6);
-    margin: var(--s4) 0;
-    box-shadow: 0 4px 16px rgba(15,118,110,0.08);
-  }
-  .exec-summary-main { flex: 1; min-width: 0; }
-  .exec-summary-eyebrow {
-    font-size: var(--fs-micro); font-weight: 800;
-    letter-spacing: 0.16em; color: var(--accent);
-    margin-bottom: var(--s2);
-  }
-  .exec-summary-title {
-    font-size: var(--fs-h2); font-weight: 800;
-    color: var(--ink); line-height: var(--lh-heading);
-    margin-bottom: var(--s3);
-  }
-  .exec-summary-title b { color: var(--accent); }
-  .exec-summary-detail {
-    color: var(--slate-600); font-size: var(--fs-body);
-    line-height: var(--lh-body);
-  }
-  .exec-summary-badge {
-    display: flex; flex-direction: column; justify-content: center;
-    align-items: center; text-align: center;
-    min-width: 140px; padding: var(--s4) var(--s5);
-    border: 2px solid; border-radius: var(--radius-lg);
-    flex-shrink: 0;
-  }
-  .exec-summary-badge-label {
-    font-size: var(--fs-micro); font-weight: 800;
-    letter-spacing: 0.14em; text-transform: uppercase;
-    opacity: 0.85; margin-bottom: var(--s2); color: inherit;
-  }
-  .exec-summary-badge-value {
-    font-family: 'Instrument Sans', sans-serif; font-weight: 800;
-    font-size: var(--fs-h4); line-height: 1.2; color: inherit;
-  }
-
-  /* ── Action bar (decision banner under exec summary) ─────────────── */
+  /* ── Action bar (decision banner) ────────────────────────────────── */
   .action-bar {
     display: flex; align-items: center; gap: var(--s4);
     background: linear-gradient(135deg, #ECFDF5 0%, #F0FDF4 100%);
@@ -3064,8 +2777,6 @@ GLOBAL_CSS: Final[str] = """
     .app-hero { flex-direction: column; align-items: flex-start;
                 padding: var(--s5); gap: var(--s4); }
     .app-hero-logo { width: 84px; }
-    .exec-summary { flex-direction: column; }
-    .exec-summary-badge { min-width: auto; }
     [data-testid="stMetric"] { padding: var(--s4); }
   }
   @media (max-width: 768px) {
@@ -3075,8 +2786,6 @@ GLOBAL_CSS: Final[str] = """
     .hero-banner, .headline-strip {
       flex-direction: column; align-items: flex-start;
     }
-    .exec-summary { flex-direction: column; }
-    .exec-summary-badge { min-width: auto; }
     .nav-tabs-anchor + div [role="radiogroup"] label p {
       white-space: normal;
     }
@@ -3297,9 +3006,6 @@ def render_overview(year: str, states: tuple[str, ...],
               delta=late_delta, delta_color="inverse")
     c5.metric("Avg Delivery Days", fmt_float(k["avg_delivery_days"]))
 
-    # GMV is definition-gated (see §1.x). It renders only when a definition
-    # is set; the definition value is passed explicitly so the cache key
-    # reflects it (default arguments are evaluated once at def time).
     gmv = query_gmv(year, states, GMV_DEFINITION)
     if gmv is not None:
         gcols = st.columns(1, gap="medium")
@@ -3330,7 +3036,6 @@ def render_overview(year: str, states: tuple[str, ...],
     render_headline_strip(year, states)
     render_kpi_insight(year, states)
 
-    # Filter-aware baseline. Decision status: FYI (context, not an action).
     _chart_card(chart_review_distribution, year, states, decision="fyi")
 
 
@@ -3349,18 +3054,11 @@ def render_theme(year: str, states: tuple[str, ...]) -> None:
 
     st.divider()
 
-    # Delivery-time buckets: ACTION (where to intervene)
     _chart_card(chart_satisfaction_by_delivery_bucket, year, states,
                 decision="action")
-
-    # Geography: MONITOR (where to look, not what to do)
     _chart_card(chart_state_scores, year, states, decision="monitor")
     _chart_card(chart_ontime_by_state, year, states, decision="monitor")
-
-    # Trend: MONITOR
     _chart_card(chart_monthly_score, year, states, decision="monitor")
-
-    # Map: FYI (distribution context, low decision value)
     _chart_card(chart_brazil_map, year, states, decision="fyi")
 
 
@@ -3376,7 +3074,6 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         "quoting the numbers in a decision."
     )
 
-    # Punctuality: ACTION (the evidence behind the primary recommendation)
     _chart_card(chart_punctuality_vs_satisfaction, year, states,
                 decision="action")
 
@@ -3394,35 +3091,18 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         variant="warn", tags=["Causality", "Confounders"],
     )
     info_card(
-        "L2 — Incomplete time coverage",
-        """<p>2016 contains only September, October and December, with
-        <b>no November orders</b>. 2018 ends on <b>17 October</b>.
-        <b>2017 is the only complete calendar year</b>.</p>
-        <p>Year-over-year comparisons treating these as full years
-        mislead — the gap is real, do not interpolate.</p>""",
-        variant="warn", tags=["Time coverage", "YoY risk"],
+        "L2 — Incomplete coverage & data grain",
+        """<p><b>Time:</b> 2016 has only September, October and December
+        (no November orders); 2018 ends <b>17 October</b>. <b>2017 is the
+        only complete calendar year</b>. <b>Grain:</b> there are
+        <b>99,224 review rows across 98,673 orders</b> (551 fan-out rows,
+        0.6%); every average here is row-level, and per-order dedupe
+        shifts means by &lt;0.01★. Treat any year-over-year comparison
+        and any quoted row count with care.</p>""",
+        variant="warn", tags=["Time coverage", "Fan-out", "Grain"],
     )
     info_card(
-        "L3 — Review fan-out (Q10)",
-        """<p>The dataset has <b>99,224 review rows across 98,673
-        distinct orders</b> — <b>551</b> rows of fan-out (<b>0.6%</b> of
-        rows). Every AVG(review_score) in this app uses <b>row-level
-        reviews</b> (matching Q2/Q3/Q4/Q6/Q9). Only the severity
-        drill-down and the what-if use per-order means — and those are
-        clearly labelled as order-grain.</p>""",
-        variant="warn", tags=["Data quality", "Fan-out", "Q10"],
-    )
-    info_card(
-        "L4 — Customer identity (Q11)",
-        """<p>The <code>customers</code> table has <b>99,441 rows</b> but
-        only <b>96,096 distinct <code>customer_unique_id</code></b>
-        values (<b>96.6%</b> unique). Any customer count here is
-        order-grain; a person-grain figure would use the unique
-        identifier.</p>""",
-        variant="info", tags=["Identity", "Grain", "Q11"],
-    )
-    info_card(
-        "L5 — Delivered ≠ delivered-with-a-date",
+        "L3 — Delivered ≠ delivered-with-a-date",
         """<p><b>Q1</b> reports 96,478 delivered orders (any
         <code>status='delivered'</code> row), but <b>Q5</b>, <b>Q6</b>
         and <b>Q9</b> add an
@@ -3430,29 +3110,21 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         shrinks the base to <b>95,832</b> delivered orders and
         <b>7,661</b> late ones. Q1's "late = 7,826" therefore includes
         <b>165</b> late orders with a NULL delivered date. Both numbers
-        are correct for their queries; the app labels which is
-        which.</p>""",
+        are correct for their queries; the app labels which is which.</p>""",
         variant="info", tags=["Q1 vs Q5/Q6", "NULL semantics"],
     )
     info_card(
-        "L6 — No delivery-distance variable",
-        """<p>The geolocation CSV is deliberately excluded. The analysis
-        <b>cannot distinguish long-distance transit from carrier
-        underperformance</b>. Adding postal-code centroids and a
-        great-circle distance would sharpen the RJ and BA
-        diagnostics.</p>""",
-        variant="info", tags=["Scope", "Distance"],
+        "L4 — Scope & external validity",
+        """<p>The geolocation CSV is excluded, so the analysis cannot
+        separate long-distance transit from carrier underperformance.
+        Findings concern Olist in Brazil during 2016–2018 and may not
+        generalise to other countries, marketplaces or current
+        conditions. The choropleth prefers a vendored local GeoJSON file
+        so map rendering is deployment-safe.</p>""",
+        variant="info", tags=["Distance", "Generalisability", "Map proxy"],
     )
     info_card(
-        "L7 — Dataset and generalisability boundaries",
-        """<p>Findings concern Olist in Brazil during 2016–2018. They
-        may not generalise to other countries, marketplaces, logistics
-        networks or current operating conditions. The choropleth prefers
-        a vendored local GeoJSON file, so map rendering is deployment-safe.</p>""",
-        variant="info", tags=["External validity", "Map proxy"],
-    )
-    info_card(
-        "L8 — Small selections are noisy",
+        "L5 — Small selections are noisy",
         """<p>Narrow selections (one state in one year) can contain only
         a few hundred reviews. Averages from small samples swing widely —
         read the <code>n=</code> labels before drawing conclusions. The
@@ -3460,19 +3132,6 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
         review distribution withholds its population-level claim below
         <b>n=200</b>.</p>""",
         variant="info", tags=["Sample size", "Filters"],
-    )
-    info_card(
-        "L9 — Reconciliation contract",
-        """<p><b>Q1</b> = <code>99,441 · 96,478 · 4.09 · 7,826 · 12.56</code>.
-        <b>Q2</b> = <code>11.5 / 3.2 / 8.2 / 19.3 / 57.8%</code>.
-        <b>Q6</b> = on-time <code>88,171 @ 4.29</code>, late
-        <code>7,661 @ 2.57</code>.
-        <b>Q7</b> = <code>7,826 · 9.55 · 189</code>.
-        <b>Q10</b> = <code>99,224 / 98,673 / 551</code>.
-        <b>Q11</b> = <code>99,441 / 96,096</code>.
-        All verified in the current code; see the <i>Whole-dataset
-        diagnostics</i> table below.</p>""",
-        variant="ok", tags=["Reconciliation", "KPI contract"],
     )
 
     st.divider()
@@ -3534,17 +3193,13 @@ def render_detail(year: str, states: tuple[str, ...]) -> None:
             }]))
             _insight(
                 "All", (),
-                f"When orders are late they miss the estimate by "
-                f"<b>{dl.mean():.2f} days</b> on average, and the worst "
-                f"case is <b>{dl.max():.1f} days</b> past it. Late orders "
-                f"are <b>{late_share:.1f}%</b> of delivered orders. A "
-                f"typical miss of more than a week points to estimates that "
-                f"are systematically optimistic rather than to small random "
-                f"slippage."
-                + _impl(
-                    "recalibrate estimated delivery dates from realised "
-                    "transit history, and review the extreme late cases "
-                    "individually."
+                f"Late orders miss the estimate by <b>{dl.mean():.1f} days</b> "
+                f"on average, worst case <b>{dl.max():.0f} days</b>. They "
+                f"are <b>{late_share:.1f}%</b> of delivered orders — the "
+                f"estimates are systematically optimistic, not randomly "
+                f"slipping." + _impl(
+                    "recalibrate ETAs from realised transit history; "
+                    "review the extreme-late cases individually."
                 ),
                 scope="Whole dataset (unfiltered)",
             )
@@ -3745,12 +3400,9 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    try:
-        render_executive_summary(year, states)
-    except Exception as exc:
-        _LOGGER.warning("Exec summary failed: %s", exc)
+    # Executive summary removed — hero + action bar carry the narrative.
 
-    # Decision banner: translates the executive summary into a next action.
+    # Decision banner: surfaces the top recommended actions.
     render_action_bar()
 
     # In-page horizontal navigation (replaces the old sidebar radio).
