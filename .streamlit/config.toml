@@ -1,16 +1,56 @@
+# .streamlit/config.toml
+
 [theme]
-base = "light"
-primaryColor = "#0F766E"          # Teal 700 — matches Palette.accent (brand)
-backgroundColor = "#FAFAF9"       # Stone 50 — matches Palette.slate_50
-secondaryBackgroundColor = "#F5F5F4"  # Stone 100 — sidebar + cards
-textColor = "#1C1917"             # Stone 900 — matches Palette.ink
-font = "sans serif"               # Inter is loaded via CSS; this is the fallback
+# ── Modern decision-first palette ─────────────────────────────────────
+# Mirrors Palette in olist_app.py so the Streamlit chrome and the custom
+# CSS agree — no visual seams between widgets and cards.
+base                     = "light"
+primaryColor             = "#0EA5E9"   # Sky 500    — interactive (brand)
+backgroundColor          = "#F8FAFC"   # Slate 50   — page background
+secondaryBackgroundColor = "#F1F5F9"   # Slate 100  — sidebar + inner cards
+textColor                = "#0F172A"   # Slate 900  — body text
+
+# Inter is loaded via the Google Fonts <link> in GLOBAL_CSS.
+# The theme font is only the fallback before the webfont resolves.
+font = "sans serif"
+
+# ── Base font size (px) — Streamlit ≥ 1.36 only ──────────────────────
+# Ignored on older versions; safe to leave in place.
+baseFontSize = 16
+
 
 [server]
-headless = true
-maxUploadSize = 200
-# enableCORS and enableXsrfProtection are intentionally left at their
-# defaults — overriding them on Community Cloud can break the session.
+# ── Required for headless deployment ────────────────────────────────
+headless         = true
+
+# Match your upload needs (Capstone CSVs total ~130 MB unzipped).
+maxUploadSize    = 200
+
+# Leave CORS / XSRF at platform defaults on Streamlit Community Cloud —
+# overriding either one breaks the session/auth handshake on Cloud.
+# enableCORS            = true      # default; do not override
+# enableXsrfProtection  = true      # default; do not override
+
+# Keep file-watcher off in production — reduces CPU on Cloud.
+fileWatcherType  = "none"
+
+# Show richer error pages instead of the generic "Oh no" screen.
+client.showErrorDetails = true
+
 
 [browser]
+# Opt out of Streamlit's usage telemetry (recommended for public apps).
 gatherUsageStats = false
+
+
+[client]
+# Show the "Deploy" / "Record" toolbar buttons only to developers.
+toolbarMode              = "minimal"
+showSidebarNavigation    = false     # the app uses its own in-page tabs
+
+
+[runner]
+# Faster startup on Cloud cold starts.
+magicEnabled              = false    # we do not rely on %%magic
+installTracer             = false
+fixMatplotlib             = true     # makes matplotlib work under Streamlit runtime
